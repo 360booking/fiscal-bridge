@@ -164,14 +164,37 @@ async def _handle_job(ws, printer: FiscalPrinter, msg: dict) -> None:
         }))
 
 
+def _close_code(exc: BaseException) -> int | None:
+    """Extract the WebSocket close code from a websockets exception.
+
+    `websockets` >= 11 exposes the close frames on `.rcvd` / `.sent`
+    (CloseFrame objects with a `.code` int). Older releases stored
+    them as attributes on the exception directly. We check both so
+    the bridge keeps working across versions."""
+    for attr in ("rcvd", "sent"):
+        frame = getattr(exc, attr, None)
+        code = getattr(frame, "code", None) if frame is not None else None
+        if isinstance(code, int):
+            return code
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, int) else None
+
+
 async def run_forever() -> None:
     """Reconnect loop with exponential backoff (capped at 60s).
 
-    Bails out (instead of retrying forever) on authentication errors —
-    if the server returns 403 or closes with code 4001/4403, the
-    token was revoked (admin hit "Deconectează" / "Reactivează").
-    Retrying in that state just spams the server with doomed attempts
-    and keeps the admin panel stuck in "offline".
+    Bails out (instead of retrying forever) on two conditions:
+      - Auth failure (HTTP 401/403 or repeated 4001/4403 close) — the
+        token was revoked, admin hit "Deconectează"/"Reactivează".
+        Retrying just spams the server.
+      - Close code 4000 "replaced by new connection" — another
+        instance of the bridge is already connected for this tenant.
+        Retrying means we'll kick them off and they'll kick us off
+        in turn, producing the 8s-apart "4000 (private use)" flap
+        seen in field reports after a power cut. Exiting here lets
+        the duplicate pair collapse to exactly one survivor: whoever
+        wins the server's last-connect-wins race keeps the slot, the
+        other dies for good.
     """
     cfg = BridgeConfig.load()
     if not cfg.is_claimed():
@@ -207,6 +230,22 @@ async def run_forever() -> None:
             else:
                 log.warning("Connection lost (HTTP %s) — retrying in %.0fs", status_code, backoff)
                 status.write({"ws_connected": False, "last_error": f"HTTP {status_code}"})
+        except websockets.ConnectionClosed as exc:
+            code = _close_code(exc)
+            if code == 4000:
+                log.error(
+                    "Server closed our connection with 4000 (replaced by new "
+                    "connection). Another 360booking bridge is already "
+                    "connected for this tenant. Exiting so the two instances "
+                    "stop flapping — restart only one of them."
+                )
+                status.write({
+                    "ws_connected": False,
+                    "last_error": "duplicate bridge (close 4000) — exited",
+                })
+                return
+            log.warning("Connection lost (close %s): %s — retrying in %.0fs", code, exc, backoff)
+            status.write({"ws_connected": False, "last_error": f"close {code}: {exc}"})
         except Exception as exc:
             log.warning("Connection lost: %s — retrying in %.0fs", exc, backoff)
             status.write({"ws_connected": False, "last_error": str(exc)})
