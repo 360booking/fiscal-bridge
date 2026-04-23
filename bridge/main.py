@@ -121,6 +121,13 @@ def _pause_on_error(exc: BaseException) -> None:
 
 
 def _claim_code(code: str, printer_model: str, server_base_url: str) -> BridgeConfig:
+    # Idempotency guard: if we already have a claimed config, skip the
+    # network call. Prevents 410 Gone when a parent invocation already
+    # saved the token and we're running in the elevated copy.
+    existing = BridgeConfig.load()
+    if existing.is_claimed():
+        _ok("ENROLL", f"already claimed as bridge {existing.bridge_id[:8]}… (skipping re-claim)")
+        return existing
     _info("ENROLL", f"POST {server_base_url}/api/fiscal-bridge/claim  (code {code[:4]}****)")
     payload = {
         "code": code,
@@ -228,16 +235,32 @@ def _install_autorun() -> None:
         _install_scheduled_task()
         return
 
-    # Not admin — try to elevate, unless the user has already been
-    # round-tripped through UAC (in which case we'd loop).
+    # Not admin — try to elevate. Strip --enroll from the relaunched
+    # command: the config was just saved by this (non-admin) process,
+    # so the elevated copy should NOT try to claim the code again (it
+    # would fail with HTTP 410 since the code is one-time-use). The
+    # elevated copy just needs --install to register the service and
+    # --run to start it.
     if os.environ.get("FB_NO_ELEVATE") != "1":
         _info("AUTORUN", "Requesting admin to install as Windows Service…")
-        # Re-launch with the SAME args, plus an env marker so the
-        # elevated copy doesn't try to elevate again if anything
-        # strange happens.
-        new_env_args = list(sys.argv[1:])
+        original = list(sys.argv[1:])
+        cleaned: list[str] = []
+        skip_next = False
+        for i, a in enumerate(original):
+            if skip_next:
+                skip_next = False
+                continue
+            if a.startswith("--enroll="):
+                continue
+            if a == "--enroll":
+                skip_next = True
+                continue
+            cleaned.append(a)
+        # Always include --install for the elevated copy.
+        if "--install" not in cleaned:
+            cleaned.append("--install")
         os.environ["FB_NO_ELEVATE"] = "1"
-        if service.relaunch_as_admin(new_env_args):
+        if service.relaunch_as_admin(cleaned):
             _ok("AUTORUN", "Relaunched with admin rights — this window will close.")
             _info("AUTORUN", "Service installation continues in the elevated window.")
             sys.exit(0)
