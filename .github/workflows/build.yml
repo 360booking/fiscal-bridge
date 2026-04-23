@@ -27,13 +27,22 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: Download NSSM (for Windows Service install)
+      - name: Verify bundled NSSM
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile nssm.zip
-          Expand-Archive -Path nssm.zip -DestinationPath nssm-tmp -Force
-          Copy-Item nssm-tmp/nssm-2.24/win64/nssm.exe -Destination nssm.exe
-          Get-Item nssm.exe | Format-List
+          if (Test-Path nssm.exe) {
+            Get-Item nssm.exe | Format-List
+            $hash = (Get-FileHash nssm.exe -Algorithm SHA256).Hash.ToLower()
+            Write-Host "SHA256: $hash"
+            $expected = "f689ee9af94b00e9e3f0bb072b34caaf207f32dcb4f5782fc9ca351df9a06c97"
+            if ($hash -ne $expected) {
+              Write-Error "nssm.exe checksum mismatch — expected $expected"
+              exit 1
+            }
+          } else {
+            Write-Error "nssm.exe missing from repo — commit it or restore the download step"
+            exit 1
+          }
 
       - name: Build .exe
         run: pyinstaller bridge.spec --clean --noconfirm
