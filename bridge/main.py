@@ -164,6 +164,22 @@ def _claim_code(code: str, printer_model: str, server_base_url: str) -> BridgeCo
     return cfg
 
 
+def _write_hidden_launcher(exe_path: str) -> Path:
+    """Write a tiny VBScript that runs the bridge fully hidden (no
+    console window) via WScript.Shell.Run(..., 0). The scheduled task
+    targets this .vbs instead of the .exe directly — that way Windows
+    doesn't flash a console at every login."""
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    vbs = d / "run-hidden.vbs"
+    content = (
+        'Set shell = CreateObject("WScript.Shell")\r\n'
+        'shell.Run """' + exe_path + '"" --run", 0, False\r\n'
+    )
+    vbs.write_text(content, encoding="utf-8")
+    return vbs
+
+
 def _install_autorun() -> None:
     import subprocess
     if platform.system() != "Windows":
@@ -171,18 +187,49 @@ def _install_autorun() -> None:
         _info("HINT", "On Linux/macOS, run `360booking-bridge --run` under systemd/launchd.")
         return
     exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    vbs = _write_hidden_launcher(exe)
+    _ok("AUTORUN", f"hidden launcher → {vbs}")
     cmd = [
         "schtasks", "/Create", "/F",
         "/SC", "ONLOGON",
         "/TN", "360bookingFiscalBridge",
-        "/TR", f'"{exe}" --run',
+        "/TR", f'wscript.exe "{vbs}"',
         "/RL", "HIGHEST",
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
-        _ok("AUTORUN", "scheduled task '360bookingFiscalBridge' registered (runs at login)")
+        _ok("AUTORUN", "scheduled task '360bookingFiscalBridge' registered")
+        _info("AUTORUN", "runs at every user login, no console window")
     except subprocess.CalledProcessError as exc:
         _fail("AUTORUN", (exc.stderr or exc.stdout or str(exc)).strip())
+
+
+def _start_hidden_now() -> None:
+    """Spawn a detached hidden copy of the bridge and exit the current
+    process. Lets the user test `--background` without reinstalling."""
+    import subprocess
+    if platform.system() != "Windows":
+        _info("BACKGND", "Non-Windows: launching with nohup-style detach")
+        subprocess.Popen(
+            [sys.argv[0], "--run"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return
+    exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    vbs = _write_hidden_launcher(exe)
+    subprocess.Popen(
+        ["wscript.exe", str(vbs)],
+        creationflags=0x00000008,  # DETACHED_PROCESS
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+    )
+    _ok("BACKGND", "bridge started in background, no console")
+    _info("BACKGND", "to stop: open Task Manager → kill the 360booking-bridge process")
+    _info("BACKGND", f"logs: {_log_path()}")
 
 
 def _uninstall_autorun() -> None:
@@ -244,8 +291,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="Serial port of the fiscal printer (e.g. COM3 on Windows, /dev/ttyUSB0 on Linux).")
     p.add_argument("--serial-baud", type=int, default=115200,
                    help="Serial baud rate (default: 115200)")
-    p.add_argument("--run", action="store_true", help="Run the WebSocket loop")
-    p.add_argument("--install", action="store_true", help="Register auto-start (Windows)")
+    p.add_argument("--run", action="store_true", help="Run the WebSocket loop (foreground, with console)")
+    p.add_argument("--background", action="store_true",
+                   help="Start the bridge in a hidden background process and exit "
+                        "the console. Combine with --run. On Windows uses a VBS "
+                        "launcher; no console window appears.")
+    p.add_argument("--install", action="store_true",
+                   help="Register auto-start at user login (Windows scheduled task, "
+                        "always hidden — no console window on boot)")
     p.add_argument("--uninstall", action="store_true", help="Remove auto-start")
     p.add_argument("--verbose", action="store_true", help="Print debug-level logs")
     args = p.parse_args(argv)
@@ -273,7 +326,9 @@ def main(argv: list[str] | None = None) -> int:
                 _check_serial_port(args.serial_port)
             if args.install:
                 _install_autorun()
-            if args.run:
+            if args.run and args.background:
+                _start_hidden_now()
+            elif args.run:
                 _run_loop()
             else:
                 _info("DONE", "Enrollment complete. Run again with --run to start the loop.")
@@ -292,7 +347,10 @@ def main(argv: list[str] | None = None) -> int:
             _info("PRINTER", f"model={cfg.printer_model}, serial={cfg.serial_port or 'none'}")
             if cfg.printer_model != "simulator" and cfg.serial_port:
                 _check_serial_port(cfg.serial_port)
-            _run_loop()
+            if args.background:
+                _start_hidden_now()
+            else:
+                _run_loop()
             return 0
 
         p.print_help()
