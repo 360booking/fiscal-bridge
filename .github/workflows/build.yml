@@ -45,4 +45,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Falls back to GITHUB_TOKEN if the PAT isn't set — lets the
+          # workflow work both with org-level "read-only" policies
+          # (using GH_RELEASE_TOKEN) and with default permissive setups.
+          token: ${{ secrets.GH_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           files: dist/360booking-bridge-setup.exe
