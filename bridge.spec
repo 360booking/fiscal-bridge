@@ -3,17 +3,24 @@
 
 Produces a single-file Windows .exe called `360booking-bridge.exe`.
 """
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
+
+# The printer registry loads modules by string path via importlib, so
+# PyInstaller can't trace them statically — we have to list the whole
+# bridge package (and any other dynamic deps) as hidden imports.
+hidden = []
+hidden += collect_submodules("bridge")
+hidden += collect_submodules("websockets")
+hidden += ["serial", "serial.tools", "serial.tools.list_ports"]
 
 a = Analysis(
     ["bridge/__main__.py"],
     pathex=["."],
     binaries=[],
     datas=[],
-    hiddenimports=[
-        "websockets",
-        "serial",
-    ],
+    hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
