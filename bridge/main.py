@@ -189,12 +189,14 @@ def _install_autorun() -> None:
     exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
     vbs = _write_hidden_launcher(exe)
     _ok("AUTORUN", f"hidden launcher → {vbs}")
+    # No /RL HIGHEST — we don't need elevation. Serial + WebSocket work
+    # as an ordinary user, and /RL HIGHEST silently fails if the CMD
+    # isn't launched as Administrator.
     cmd = [
         "schtasks", "/Create", "/F",
         "/SC", "ONLOGON",
         "/TN", "360bookingFiscalBridge",
         "/TR", f'wscript.exe "{vbs}"',
-        "/RL", "HIGHEST",
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -353,8 +355,16 @@ def main(argv: list[str] | None = None) -> int:
                 _run_loop()
             return 0
 
-        p.print_help()
-        return 2
+        # No args → launch the GUI. Lets tenants double-click the
+        # .exe from Explorer and get a small window to paste the code
+        # into instead of using the CLI.
+        try:
+            from .gui import run_gui
+            return run_gui()
+        except Exception as exc:
+            _fail("GUI", f"could not start: {exc}")
+            _info("HINT", "Run with --help to see CLI options.")
+            return 2
     except SystemExit:
         raise
     except BaseException as exc:
