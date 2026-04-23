@@ -114,6 +114,11 @@ def main(argv: list[str] | None = None) -> int:
                    help=f"Printer backend (default: simulator). Registered: {', '.join(available_models())}")
     p.add_argument("--server", default="https://360booking.ro",
                    help="Server base URL (default: https://360booking.ro)")
+    p.add_argument("--serial-port", default=None,
+                   help="Serial port of the fiscal printer (e.g. COM3 on Windows, /dev/ttyUSB0 on Linux). "
+                        "Required when --printer is not 'simulator'.")
+    p.add_argument("--serial-baud", type=int, default=115200,
+                   help="Serial baud rate (default: 115200)")
     p.add_argument("--run", action="store_true", help="Run the WebSocket loop")
     p.add_argument("--install", action="store_true", help="Register auto-start (Windows)")
     p.add_argument("--uninstall", action="store_true", help="Remove auto-start")
@@ -124,7 +129,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.enroll:
-        _claim_code(args.enroll, args.printer, args.server)
+        cfg = _claim_code(args.enroll, args.printer, args.server)
+        # Persist optional serial config from CLI so the ws_client
+        # picks it up when it builds the printer.
+        if args.serial_port or args.serial_baud != 115200:
+            cfg.serial_port = args.serial_port
+            cfg.serial_baud = args.serial_baud
+            cfg.save()
+            print(f"  Serial port: {cfg.serial_port} @ {cfg.serial_baud}")
         if args.install:
             _install_autorun()
         if args.run:
