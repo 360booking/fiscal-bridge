@@ -36,6 +36,7 @@ hidden += [
     "bridge.status",
     "bridge.tray",
     "bridge.upgrade",
+    "bridge.single_instance",
     "bridge.printers",
     "bridge.printers.base",
     "bridge.printers.registry",

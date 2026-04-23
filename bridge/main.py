@@ -348,7 +348,25 @@ def _run_loop() -> None:
     """Run the WebSocket loop. In windowed (no-console) builds we route
     through the tray icon so the user sees a visible indicator in the
     notification area; CLI runs (with a real terminal) stick to the
-    plain loop so output still shows up in the window."""
+    plain loop so output still shows up in the window.
+
+    Refuses to start if another instance already holds the global
+    named mutex — prevents the "bridge flapping between connected
+    and offline" symptom caused by two copies fighting over the
+    same device_token."""
+    try:
+        from . import single_instance
+        single_instance.acquire()
+    except Exception as exc:
+        from .single_instance import AlreadyRunning
+        if isinstance(exc, AlreadyRunning):
+            _fail("SINGLE", str(exc))
+            _info("HINT", "Close the other tray icon, or kill all 360booking-bridge processes in Task Manager.")
+            return
+        # Fall through on unexpected errors — a broken mutex shouldn't
+        # stop the bridge from running.
+        _info("SINGLE", f"lock probe failed ({exc}) — continuing anyway")
+
     if sys.stdout and sys.stdout.isatty():
         print()
         print(_c("32", f"  {_c('1', 'Bridge is running.')}  Press Ctrl+C to stop."))
