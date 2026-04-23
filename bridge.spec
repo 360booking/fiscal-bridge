@@ -16,7 +16,7 @@ hidden += collect_submodules("websockets")
 hidden += ["serial", "serial.tools", "serial.tools.list_ports"]
 
 a = Analysis(
-    ["bridge/__main__.py"],
+    ["run_bridge.py"],
     pathex=["."],
     binaries=[],
     datas=[],
