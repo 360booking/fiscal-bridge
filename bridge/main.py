@@ -189,12 +189,14 @@ def _install_autorun() -> None:
     exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
     vbs = _write_hidden_launcher(exe)
     _ok("AUTORUN", f"hidden launcher → {vbs}")
+    # No /RL HIGHEST — we don't need elevation. Serial + WebSocket work
+    # as an ordinary user, and /RL HIGHEST silently fails if the CMD
+    # isn't launched as Administrator.
     cmd = [
         "schtasks", "/Create", "/F",
         "/SC", "ONLOGON",
         "/TN", "360bookingFiscalBridge",
         "/TR", f'wscript.exe "{vbs}"',
-        "/RL", "HIGHEST",
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
