@@ -265,7 +265,16 @@ def _install_autorun() -> None:
         if service.relaunch_as_admin(cleaned):
             _ok("AUTORUN", "Relaunched with admin rights — this window will close.")
             _info("AUTORUN", "Service installation continues in the elevated window.")
-            sys.exit(0)
+            # Only exit the whole process when we're running from the
+            # CLI. When called from the tkinter GUI thread, `sys.exit`
+            # only kills the background thread and leaves the GUI
+            # stuck on "Configuring autostart…" forever. The GUI sets
+            # FB_FROM_GUI=1 before calling us; in that case we just
+            # return and let the GUI's poller detect the service
+            # appearing a few seconds later.
+            if os.environ.get("FB_FROM_GUI") != "1":
+                sys.exit(0)
+            return
         _fail("AUTORUN", "UAC elevation declined")
 
     _info("AUTORUN", "Falling back to scheduled task (per-user, less robust)")

@@ -176,15 +176,28 @@ class EnrollForm:
 
         if self.autorun.get():
             try:
+                # Mark this call path so _install_autorun() doesn't
+                # sys.exit on UAC elevation — that would silently kill
+                # the GUI thread and leave the form stuck.
+                import os as _os
+                _os.environ["FB_FROM_GUI"] = "1"
                 from .main import _install_autorun
-                _install_autorun()
+                try:
+                    _install_autorun()
+                except SystemExit:
+                    pass
+                finally:
+                    _os.environ.pop("FB_FROM_GUI", None)
             except Exception as exc:
                 self.root.after(0, lambda e=exc: self.status.set(f"Auto-start a eșuat: {e}"))
 
         if self.background.get():
             try:
                 from .main import _start_hidden_now
-                _start_hidden_now()
+                try:
+                    _start_hidden_now()
+                except SystemExit:
+                    pass
             except Exception as exc:
                 self.root.after(0, lambda e=exc: self.status.set(f"Pornire background a eșuat: {e}"))
 
