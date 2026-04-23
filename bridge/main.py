@@ -366,14 +366,16 @@ def _run_loop() -> None:
     try:
         from . import single_instance
         single_instance.acquire()
+    except single_instance.AlreadyRunning as exc:
+        _fail("SINGLE", str(exc))
+        _info("HINT", "Close the other tray icon, or kill all 360booking-bridge processes in Task Manager.")
+        # Silent exit via `return` so the duplicate launcher doesn't
+        # spawn a tray icon next to the running one — user sees just
+        # the existing bridge instead of two fighting copies.
+        return
     except Exception as exc:
-        from .single_instance import AlreadyRunning
-        if isinstance(exc, AlreadyRunning):
-            _fail("SINGLE", str(exc))
-            _info("HINT", "Close the other tray icon, or kill all 360booking-bridge processes in Task Manager.")
-            return
-        # Fall through on unexpected errors — a broken mutex shouldn't
-        # stop the bridge from running.
+        # Unexpected failure in the lock itself — log and continue
+        # rather than blocking legitimate startup.
         _info("SINGLE", f"lock probe failed ({exc}) — continuing anyway")
 
     if sys.stdout and sys.stdout.isatty():
