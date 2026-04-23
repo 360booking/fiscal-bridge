@@ -85,7 +85,7 @@ class DatecsDP25Printer(FiscalPrinter):
     def __init__(self, config: Optional[dict] = None):
         super().__init__(config)
         self.serial_port = (self.config or {}).get("serial_port")
-        self.serial_baud = int((self.config or {}).get("serial_baud", 115200))
+        self.serial_baud = int((self.config or {}).get("serial_baud", 9600))
         # Operator credentials (default 1/0000 on a virgin device)
         self.operator = str((self.config or {}).get("operator") or "1")
         self.operator_password = str((self.config or {}).get("operator_password") or "0000")

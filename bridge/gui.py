@@ -240,7 +240,8 @@ class StatusPanel:
         self.root.after(2000, self._refresh)
 
     def _build(self) -> None:
-        cfg = BridgeConfig.load()
+        self.cfg = BridgeConfig.load()
+        cfg = self.cfg
         f = ttk.Frame(self.root, padding=20)
         f.grid(row=0, column=0, sticky="nsew")
 
@@ -286,11 +287,140 @@ class StatusPanel:
 
         btn_bar = ttk.Frame(f)
         btn_bar.grid(row=20, column=0, columnspan=2, pady=(16, 0), sticky="e")
-        ttk.Button(btn_bar, text="Pornește acum", command=self._start).grid(row=0, column=0, padx=4)
-        ttk.Button(btn_bar, text="Oprește", command=self._stop).grid(row=0, column=1, padx=4)
-        ttk.Button(btn_bar, text="Deschide log", command=self._open_log).grid(row=0, column=2, padx=4)
-        ttk.Button(btn_bar, text="Reactivează", command=self._reenroll).grid(row=0, column=3, padx=4)
-        ttk.Button(btn_bar, text="Dezinstalează", command=self._uninstall).grid(row=0, column=4, padx=4)
+        ttk.Button(btn_bar, text="Setări imprimantă", command=self._edit_printer_config).grid(row=0, column=0, padx=4)
+        ttk.Button(btn_bar, text="Pornește", command=self._start).grid(row=0, column=1, padx=4)
+        ttk.Button(btn_bar, text="Oprește", command=self._stop).grid(row=0, column=2, padx=4)
+        ttk.Button(btn_bar, text="Deschide log", command=self._open_log).grid(row=0, column=3, padx=4)
+
+        btn_bar2 = ttk.Frame(f)
+        btn_bar2.grid(row=21, column=0, columnspan=2, pady=(8, 0), sticky="e")
+        ttk.Button(btn_bar2, text="Reactivează", command=self._reenroll).grid(row=0, column=0, padx=4)
+        ttk.Button(btn_bar2, text="Dezinstalează", command=self._uninstall).grid(row=0, column=1, padx=4)
+
+    def _edit_printer_config(self) -> None:
+        """Dialog to edit printer_model / serial_port / serial_baud
+        without touching config.json by hand. Writes JSON without a
+        BOM so Python's json.loads doesn't choke on reload."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Setări imprimantă")
+        dlg.geometry("460x360")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        f = ttk.Frame(dlg, padding=16)
+        f.grid(row=0, column=0, sticky="nsew")
+
+        cfg = self.cfg
+
+        # --- Model ---
+        ttk.Label(f, text="Model imprimantă:").grid(row=0, column=0, sticky="w", pady=4)
+        model_var = tk.StringVar(value=cfg.printer_model or "simulator")
+        ttk.Combobox(f, textvariable=model_var, values=available_models(),
+                     state="readonly", width=28).grid(row=0, column=1, sticky="we", pady=4)
+
+        # --- COM port with scan button ---
+        ttk.Label(f, text="Port COM:").grid(row=1, column=0, sticky="w", pady=4)
+        com_var = tk.StringVar(value=cfg.serial_port or "")
+        com_combo = ttk.Combobox(f, textvariable=com_var, width=26)
+        com_combo.grid(row=1, column=1, sticky="we", pady=4)
+
+        def _scan_ports():
+            try:
+                import serial.tools.list_ports
+                ports = [p.device for p in serial.tools.list_ports.comports()]
+                com_combo["values"] = ports
+                if ports and not com_var.get():
+                    com_var.set(ports[0])
+                messagebox.showinfo(WINDOW_TITLE,
+                                    f"Porturi detectate: {', '.join(ports) if ports else '(niciunul)'}")
+            except Exception as exc:
+                messagebox.showerror(WINDOW_TITLE, f"Scanare eșuată: {exc}")
+
+        ttk.Button(f, text="↻ Scanează", command=_scan_ports, width=12).grid(row=1, column=2, padx=4, pady=4)
+
+        # Pre-populate the dropdown with whatever is currently attached
+        try:
+            import serial.tools.list_ports
+            com_combo["values"] = [p.device for p in serial.tools.list_ports.comports()]
+        except Exception:
+            pass
+
+        # --- Baud ---
+        ttk.Label(f, text="Baud rate:").grid(row=2, column=0, sticky="w", pady=4)
+        baud_var = tk.StringVar(value=str(cfg.serial_baud or 9600))
+        ttk.Combobox(f, textvariable=baud_var,
+                     values=["4800", "9600", "19200", "38400", "57600", "115200"],
+                     state="readonly", width=28).grid(row=2, column=1, sticky="we", pady=4)
+
+        ttk.Label(f, text="DP-25 folosește 9600 implicit.",
+                  foreground="#666", font=("Segoe UI", 8)).grid(row=3, column=1, sticky="w")
+
+        # --- Separator ---
+        ttk.Separator(f, orient="horizontal").grid(row=4, column=0, columnspan=3, sticky="we", pady=12)
+        ttk.Label(f, text="Setări avansate (Datecs)",
+                  font=("Segoe UI", 9, "bold")).grid(row=5, column=0, columnspan=3, sticky="w")
+
+        # --- Operator credentials ---
+        ttk.Label(f, text="Operator ID:").grid(row=6, column=0, sticky="w", pady=4)
+        op_var = tk.StringVar(value=str(getattr(cfg, "operator", "1") or "1"))
+        ttk.Entry(f, textvariable=op_var, width=28).grid(row=6, column=1, sticky="we", pady=4)
+
+        ttk.Label(f, text="Operator parolă:").grid(row=7, column=0, sticky="w", pady=4)
+        pw_var = tk.StringVar(value=str(getattr(cfg, "operator_password", "0000") or "0000"))
+        ttk.Entry(f, textvariable=pw_var, width=28).grid(row=7, column=1, sticky="we", pady=4)
+
+        # --- Save / Cancel ---
+        status_var = tk.StringVar(value="")
+        ttk.Label(f, textvariable=status_var, foreground="#444").grid(
+            row=8, column=0, columnspan=3, sticky="w", pady=(12, 0))
+
+        btns = ttk.Frame(f)
+        btns.grid(row=9, column=0, columnspan=3, sticky="e", pady=(12, 0))
+
+        def _save():
+            try:
+                # Write config without BOM.
+                import json
+                data = {
+                    "device_token": cfg.device_token,
+                    "tenant_id": cfg.tenant_id,
+                    "bridge_id": cfg.bridge_id,
+                    "websocket_url": cfg.websocket_url,
+                    "printer_model": model_var.get().strip() or "simulator",
+                    "health_port": getattr(cfg, "health_port", 17890),
+                    "server_base_url": cfg.server_base_url,
+                    "serial_port": com_var.get().strip() or None,
+                    "serial_baud": int(baud_var.get() or 9600),
+                }
+                # Keep extra fields on BridgeConfig if any were set before.
+                for extra in ("operator", "operator_password"):
+                    val = {"operator": op_var.get(), "operator_password": pw_var.get()}[extra]
+                    if val:
+                        data[extra] = val
+
+                from .config import config_path
+                p = config_path()
+                p.parent.mkdir(parents=True, exist_ok=True)
+                # Explicit utf-8 (no BOM) + deterministic key order
+                p.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+                dlg.destroy()
+                messagebox.showinfo(
+                    WINDOW_TITLE,
+                    "Setările au fost salvate.\n\n"
+                    "Bridge-ul se va reconecta automat cu noile setări "
+                    "(opreste-l și pornește-l din tray dacă nu se actualizează).",
+                )
+                # Refresh the cfg we hold so the status panel shows the new values
+                self.cfg = BridgeConfig.load()
+            except Exception as exc:
+                status_var.set(f"Eroare: {exc}")
+
+        ttk.Button(btns, text="Anulează", command=dlg.destroy).grid(row=0, column=0, padx=4)
+        ttk.Button(btns, text="Salvează", command=_save).grid(row=0, column=1, padx=4)
+
+        f.columnconfigure(1, weight=1)
 
     @staticmethod
     def _set_dot(var: tk.StringVar, lbl_var: tk.StringVar,

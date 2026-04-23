@@ -57,7 +57,12 @@ class BridgeConfig:
     server_base_url: str = "https://360booking.ro"
     # Serial port for real printer (e.g. COM3 / /dev/ttyUSB0)
     serial_port: Optional[str] = None
-    serial_baud: int = 115200
+    serial_baud: int = 9600
+    # Datecs-specific operator credentials — default 1 / 0000 on
+    # factory-fresh devices. Override via the GUI settings dialog
+    # when the tenant has a different operator set up.
+    operator: str = "1"
+    operator_password: str = "0000"
 
     def save(self) -> None:
         p = config_path()
@@ -70,7 +75,10 @@ class BridgeConfig:
         if not p.exists():
             return cls()
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            # utf-8-sig silently strips the BOM notepad likes to add.
+            # Without this, any user who edits config.json in Notepad
+            # makes the file unparseable by json.loads.
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
             return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
         except Exception:
             return cls()

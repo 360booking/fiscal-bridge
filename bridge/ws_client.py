@@ -28,6 +28,8 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     printer_config = {
         "serial_port": cfg.serial_port,
         "serial_baud": cfg.serial_baud,
+        "operator": getattr(cfg, "operator", "1"),
+        "operator_password": getattr(cfg, "operator_password", "0000"),
     }
     try:
         return printers.build(cfg.printer_model, printer_config)
