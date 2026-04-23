@@ -20,7 +20,8 @@ from typing import Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from . import __version__, status as status_file
+from . import __version__
+from . import status as status_file
 from .config import BridgeConfig, config_dir
 from .printers import available_models
 
@@ -93,13 +94,15 @@ class EnrollForm:
         self._build()
 
     def _build(self) -> None:
-        f = ttk.Frame(self.root, padding=20)
+        f = ttk.Frame(self.root, padding=24)
         f.grid(row=0, column=0, sticky="nsew")
 
         ttk.Label(f, text="Activare 360booking Fiscal Bridge",
-                  font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 6))
-        ttk.Label(f, text="Generează codul din panoul 360booking → Setări fiscale → Activează",
-                  foreground="#666").grid(row=1, column=0, columnspan=2, pady=(0, 16))
+                  style="Header.TLabel").grid(row=0, column=0, columnspan=2, pady=(0, 4))
+        ttk.Label(f, text=f"v{__version__}  ·  Bridge Windows pentru casa de marcat fiscală",
+                  style="Muted.TLabel").grid(row=1, column=0, columnspan=2, pady=(0, 12))
+        ttk.Label(f, text="Generează codul din 360booking → Restaurant → Setări fiscale → Activează",
+                  foreground="#444").grid(row=2, column=0, columnspan=2, pady=(0, 20))
 
         ttk.Label(f, text="Cod de activare:").grid(row=2, column=0, sticky="w", pady=4)
         self.code = tk.StringVar()
@@ -245,11 +248,17 @@ class StatusPanel:
         f = ttk.Frame(self.root, padding=20)
         f.grid(row=0, column=0, sticky="nsew")
 
-        ttk.Label(f, text="360booking Fiscal Bridge",
-                  font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 12))
+        # --- Header: app name + version on right ---
+        hdr = ttk.Frame(f)
+        hdr.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 14))
+        ttk.Label(hdr, text="360booking Fiscal Bridge",
+                  style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(hdr, text=f"v{__version__}",
+                  style="Muted.TLabel").grid(row=0, column=1, sticky="e", padx=(12, 0))
+        hdr.columnconfigure(0, weight=1)
 
         # Live indicators — three rows, each with a colored dot + label.
-        live_box = ttk.LabelFrame(f, text=" Stare ", padding=10)
+        live_box = ttk.LabelFrame(f, text=" Stare ", padding=12)
         live_box.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 12))
 
         self.dot_process = tk.StringVar(value="●")
@@ -273,29 +282,50 @@ class StatusPanel:
             "printer": (self.dot_printer, None),
         }
 
+        # Detail box grouping tenant + printer info
+        info_box = ttk.LabelFrame(f, text=" Detalii conexiune ", padding=12)
+        info_box.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 8))
+
         rows = [
-            ("Bridge ID:", (cfg.bridge_id or "")[:24] + "…" if cfg.bridge_id else "(not set)"),
-            ("Tenant:", (cfg.tenant_id or "")[:24] + "…" if cfg.tenant_id else "(not set)"),
-            ("Imprimantă:", cfg.printer_model or "simulator"),
-            ("Port COM:", cfg.serial_port or "(nu e setat)"),
-            ("Versiune bridge:", __version__),
-            ("Log file:", str(config_dir() / "bridge.log")),
+            ("Bridge ID", (cfg.bridge_id or "")[:24] + "…" if cfg.bridge_id else "(not set)"),
+            ("Tenant", (cfg.tenant_id or "")[:24] + "…" if cfg.tenant_id else "(not set)"),
+            ("Imprimantă", cfg.printer_model or "simulator"),
+            ("Port COM", cfg.serial_port or "(nu e setat)"),
+            ("Baud rate", str(cfg.serial_baud or 9600)),
         ]
-        for i, (label, value) in enumerate(rows, start=2):
-            ttk.Label(f, text=label, foreground="#444").grid(row=i, column=0, sticky="w", pady=2)
-            ttk.Label(f, text=value, font=("Consolas", 9)).grid(row=i, column=1, sticky="w", pady=2)
+        for i, (label, value) in enumerate(rows):
+            ttk.Label(info_box, text=label + ":", foreground="#555").grid(row=i, column=0, sticky="w", pady=2, padx=(0, 12))
+            ttk.Label(info_box, text=value, font=("Consolas", 9)).grid(row=i, column=1, sticky="w", pady=2)
+        info_box.columnconfigure(1, weight=1)
 
-        btn_bar = ttk.Frame(f)
-        btn_bar.grid(row=20, column=0, columnspan=2, pady=(16, 0), sticky="e")
-        ttk.Button(btn_bar, text="Setări imprimantă", command=self._edit_printer_config).grid(row=0, column=0, padx=4)
-        ttk.Button(btn_bar, text="Pornește", command=self._start).grid(row=0, column=1, padx=4)
-        ttk.Button(btn_bar, text="Oprește", command=self._stop).grid(row=0, column=2, padx=4)
-        ttk.Button(btn_bar, text="Deschide log", command=self._open_log).grid(row=0, column=3, padx=4)
+        # Log file location (for support)
+        log_box = ttk.Frame(f)
+        log_box.grid(row=3, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        ttk.Label(log_box, text="Log:", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(log_box, text=str(config_dir() / "bridge.log"),
+                  font=("Consolas", 8), foreground="#666").grid(row=0, column=1, sticky="w", padx=(4, 0))
 
-        btn_bar2 = ttk.Frame(f)
-        btn_bar2.grid(row=21, column=0, columnspan=2, pady=(8, 0), sticky="e")
-        ttk.Button(btn_bar2, text="Reactivează", command=self._reenroll).grid(row=0, column=0, padx=4)
-        ttk.Button(btn_bar2, text="Dezinstalează", command=self._uninstall).grid(row=0, column=1, padx=4)
+        # --- Main actions (primary buttons) ---
+        actions = ttk.LabelFrame(f, text=" Acțiuni ", padding=12)
+        actions.grid(row=4, column=0, columnspan=2, sticky="we", pady=(12, 0))
+
+        ttk.Button(actions, text="🖨  Setări imprimantă",
+                   command=self._edit_printer_config, style="Accent.TButton",
+                   width=22).grid(row=0, column=0, padx=4, pady=4, sticky="we")
+        ttk.Button(actions, text="▶  Pornește",
+                   command=self._start, width=22).grid(row=0, column=1, padx=4, pady=4, sticky="we")
+        ttk.Button(actions, text="■  Oprește",
+                   command=self._stop, width=22).grid(row=0, column=2, padx=4, pady=4, sticky="we")
+
+        ttk.Button(actions, text="📄  Deschide log",
+                   command=self._open_log, width=22).grid(row=1, column=0, padx=4, pady=4, sticky="we")
+        ttk.Button(actions, text="⟳  Reactivează (re-enroll)",
+                   command=self._reenroll, width=22).grid(row=1, column=1, padx=4, pady=4, sticky="we")
+        ttk.Button(actions, text="🗑  Dezinstalează",
+                   command=self._uninstall, width=22).grid(row=1, column=2, padx=4, pady=4, sticky="we")
+
+        for col in range(3):
+            actions.columnconfigure(col, weight=1)
 
     def _edit_printer_config(self) -> None:
         """Dialog to edit printer_model / serial_port / serial_baud
@@ -568,16 +598,31 @@ class StatusPanel:
 
 # ------------------------------ entry point -----------------------------
 
+def _style_setup(root: tk.Tk) -> None:
+    """Global ttk styling — pick a modern theme + beef up spacing so
+    the GUI doesn't look like a Windows 95 tool."""
+    style = ttk.Style()
+    try:
+        style.theme_use("vista" if _is_windows() else "clam")
+    except tk.TclError:
+        pass
+    # Bigger default padding on buttons, consistent fonts.
+    style.configure("TButton", padding=(10, 6))
+    style.configure("Accent.TButton", padding=(12, 6), font=("Segoe UI", 9, "bold"))
+    style.configure("TLabel", font=("Segoe UI", 9))
+    style.configure("Header.TLabel", font=("Segoe UI", 13, "bold"))
+    style.configure("Muted.TLabel", foreground="#666", font=("Segoe UI", 8))
+    style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"))
+    style.configure("TLabelFrame.Label", font=("Segoe UI", 9, "bold"))
+
+
 def run_gui() -> int:
     root = tk.Tk()
     root.title(WINDOW_TITLE)
-    root.geometry("520x460")
+    root.geometry("620x560")
     root.resizable(False, False)
 
-    try:
-        ttk.Style().theme_use("vista" if _is_windows() else "clam")
-    except tk.TclError:
-        pass
+    _style_setup(root)
 
     cfg = BridgeConfig.load()
     if cfg.is_claimed():
