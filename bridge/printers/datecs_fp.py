@@ -43,27 +43,36 @@ NAK = 0x15
 ACK = 0x06
 
 
-def _encode_4nibbles(value: int) -> bytes:
-    """FP-55 encoding: 4 bytes, each = (nibble & 0xF) + 0x20.
-    Example: 0x0123 → b' !"#' (0x20 0x21 0x22 0x23)
-             0x00AB → b' *+' (0x20 0x20 0x2A 0x2B)  (10 → 0x2A, 11 → 0x2B)
+def _encode_4nibbles(value: int, offset: int = 0x20) -> bytes:
+    """Datecs nibble encoding — 4 bytes, each = (nibble & 0xF) + offset.
+    FP-55 uses offset=0x20, FP-700 uses offset=0x30. The `offset` is
+    pushable from the backend via protocol_config.encoding_offset so
+    we can flip variants without a new build.
     """
     return bytes([
-        ((value >> 12) & 0xF) + 0x20,
-        ((value >> 8) & 0xF) + 0x20,
-        ((value >> 4) & 0xF) + 0x20,
-        (value & 0xF) + 0x20,
+        ((value >> 12) & 0xF) + offset,
+        ((value >> 8) & 0xF) + offset,
+        ((value >> 4) & 0xF) + offset,
+        (value & 0xF) + offset,
     ])
 
 
-def _calc_bcc(payload: bytes) -> bytes:
-    """SUM checksum (NOT XOR) across `payload` — each byte added, result
-    truncated to 16 bits and encoded per the 4-nibble convention."""
-    total = 0
-    for b in payload:
-        total += b
+def _calc_bcc(payload: bytes, algo: str = "sum", offset: int = 0x20) -> bytes:
+    """Compute the 4-nibble BCC for `payload`.
+
+    algo: "sum" (FP-55) or "xor" (FP-700).
+    offset: nibble offset for encoding (matches frame LEN/CMD encoding).
+    """
+    if algo == "xor":
+        total = 0
+        for b in payload:
+            total ^= b
+    else:
+        total = 0
+        for b in payload:
+            total += b
     total &= 0xFFFF
-    return _encode_4nibbles(total)
+    return _encode_4nibbles(total, offset)
 
 
 class DatecsFPError(Exception):
@@ -81,10 +90,24 @@ class FrameResponse:
 class DatecsFPTransport:
     """Opens the COM port, sends framed commands, reads framed replies."""
 
-    def __init__(self, port: str, baud: int = 9600, timeout: float = 3.0):
+    def __init__(
+        self,
+        port: str,
+        baud: int = 9600,
+        timeout: float = 3.0,
+        *,
+        encoding_offset: int = 0x20,
+        bcc_algo: str = "sum",
+        bcc_coverage: str = "body",
+        cmd_width: int = 4,
+    ):
         self.port = port
         self.baud = baud
         self.timeout = timeout
+        self.encoding_offset = encoding_offset
+        self.bcc_algo = bcc_algo
+        self.bcc_coverage = bcc_coverage
+        self.cmd_width = cmd_width
         self._ser: Optional[serial.Serial] = None
         self._seq = 0x1F  # first _next_seq() returns 0x20
 
@@ -116,13 +139,16 @@ class DatecsFPTransport:
 
     def _build_frame(self, cmd: int, data: bytes) -> bytes:
         seq = self._next_seq()
-        cmd_enc = _encode_4nibbles(cmd)
-        # Body per spec = SEQ + CMD + DATA + POST
+        # CMD encoding: FP-55 uses 4 nibble-encoded bytes, FP-700 uses
+        # a single raw byte. Switchable at runtime via cmd_width.
+        if self.cmd_width == 4:
+            cmd_enc = _encode_4nibbles(cmd, self.encoding_offset)
+        else:
+            cmd_enc = bytes([cmd])
         body = bytes([seq]) + cmd_enc + data + bytes([POST])
-        # LEN is the length of the body, encoded per 4-nibble convention.
-        length_enc = _encode_4nibbles(len(body))
-        # BCC runs over SEQ..POST (the body), not over LEN too.
-        bcc = _calc_bcc(body)
+        length_enc = _encode_4nibbles(len(body), self.encoding_offset)
+        bcc_target = body if self.bcc_coverage == "body" else length_enc + body
+        bcc = _calc_bcc(bcc_target, algo=self.bcc_algo, offset=self.encoding_offset)
         return bytes([STX]) + length_enc + body + bcc + bytes([ETX])
 
     def _read_frame(self) -> bytes:

@@ -32,19 +32,10 @@ from .datecs_fp import DatecsFPError, DatecsFPTransport
 log = logging.getLogger("bridge.dp25")
 
 
-# ---- Command codes (FP-700 default) ------------------------------------
-
-CMD_STATUS = 0x4A
-CMD_OPEN_FISCAL = 0x30       # open fiscal receipt
-CMD_REGISTER_ITEM = 0x31     # register item / plu
-CMD_SUBTOTAL = 0x33          # subtotal
-CMD_PAYMENT = 0x35           # payment
-CMD_CLOSE_FISCAL = 0x38      # close fiscal receipt
-CMD_OPEN_NON_FISCAL = 0x26   # open non-fiscal
-CMD_PRINT_TEXT = 0x2A        # print text line
-CMD_CLOSE_NON_FISCAL = 0x27  # close non-fiscal
-CMD_X_REPORT = 0x45          # X report (arg "0")
-CMD_Z_REPORT = 0x45          # Z report (arg "1"); same cmd, different data
+# Default FP-55 command codes. Each instance copies these into
+# self._codes in __init__ and overlays any config["cmd_codes"]
+# override so the server can tweak a single byte per tenant without
+# shipping a new .exe.
 
 
 # Romanian VAT groups — DP-25 firmware assigns these letters
@@ -84,11 +75,31 @@ class DatecsDP25Printer(FiscalPrinter):
 
     def __init__(self, config: Optional[dict] = None):
         super().__init__(config)
-        self.serial_port = (self.config or {}).get("serial_port")
-        self.serial_baud = int((self.config or {}).get("serial_baud", 9600))
-        # Operator credentials (default 1/0000 on a virgin device)
-        self.operator = str((self.config or {}).get("operator") or "1")
-        self.operator_password = str((self.config or {}).get("operator_password") or "0000")
+        cfg = self.config or {}
+        self.serial_port = cfg.get("serial_port")
+        self.serial_baud = int(cfg.get("baud") or cfg.get("serial_baud") or 9600)
+        self.operator = str(cfg.get("operator") or "1")
+        self.operator_password = str(cfg.get("operator_password") or "0000")
+        # Protocol knobs pushable from the server. Defaults = FP-55.
+        self.encoding_offset = int(cfg.get("encoding_offset", 0x20))
+        self.bcc_algo = str(cfg.get("bcc_algo", "sum"))
+        self.bcc_coverage = str(cfg.get("bcc_coverage", "body"))
+        self.cmd_width = int(cfg.get("cmd_width", 4))
+        # CMD codes overridable as a dict (e.g. {"open_fiscal": 0x30}).
+        code_override = cfg.get("cmd_codes") or {}
+        self._codes = {
+            "open_fiscal": int(code_override.get("open_fiscal", 0x30)),
+            "register_item": int(code_override.get("register_item", 0x31)),
+            "subtotal": int(code_override.get("subtotal", 0x33)),
+            "payment": int(code_override.get("payment", 0x35)),
+            "close_fiscal": int(code_override.get("close_fiscal", 0x38)),
+            "open_nonfiscal": int(code_override.get("open_nonfiscal", 0x26)),
+            "print_text": int(code_override.get("print_text", 0x2A)),
+            "close_nonfiscal": int(code_override.get("close_nonfiscal", 0x27)),
+            "x_report": int(code_override.get("x_report", 0x45)),
+            "z_report": int(code_override.get("z_report", 0x45)),
+            "status": int(code_override.get("status", 0x4A)),
+        }
         self.vat_map: Dict[float, str] = (
             (self.config or {}).get("vat_map") or _VAT_GROUP_MAP
         )
@@ -96,7 +107,14 @@ class DatecsDP25Printer(FiscalPrinter):
             raise FiscalPrinterError(
                 "datecs_dp25: serial_port missing in config (e.g. 'COM3' or '/dev/ttyUSB0')"
             )
-        self._transport = DatecsFPTransport(self.serial_port, self.serial_baud)
+        self._transport = DatecsFPTransport(
+            self.serial_port,
+            self.serial_baud,
+            encoding_offset=self.encoding_offset,
+            bcc_algo=self.bcc_algo,
+            bcc_coverage=self.bcc_coverage,
+            cmd_width=self.cmd_width,
+        )
 
     # -- dispatch --
 
@@ -128,15 +146,15 @@ class DatecsDP25Printer(FiscalPrinter):
 
     def _test_print(self, job: PrintJob) -> PrintResult:
         msg = job.payload.get("message") or "360booking test print"
-        self._transport.execute(CMD_OPEN_NON_FISCAL)
+        self._transport.execute(self._codes["open_nonfiscal"])
         for line in (
             "=== 360booking ===",
             _truncate(msg),
             datetime.now().strftime("%Y-%m-%d %H:%M"),
             "Bridge v0.1 — DP-25",
         ):
-            self._transport.execute(CMD_PRINT_TEXT, line.encode("cp1250", errors="replace"))
-        self._transport.execute(CMD_CLOSE_NON_FISCAL)
+            self._transport.execute(self._codes["print_text"], line.encode("cp1250", errors="replace"))
+        self._transport.execute(self._codes["close_nonfiscal"])
         return PrintResult(success=True, data={"kind": "test_print", "printed": True})
 
     # -- fiscal receipt --
@@ -150,7 +168,7 @@ class DatecsDP25Printer(FiscalPrinter):
 
         # Open fiscal: <op>,<pwd>,<till>
         open_data = f"{self.operator},{self.operator_password},1".encode("ascii")
-        self._transport.execute(CMD_OPEN_FISCAL, open_data)
+        self._transport.execute(self._codes["open_fiscal"], open_data)
 
         # Register items.
         # Data format (FP-700): <name>\t<Tx>\t<price>\t<qty>[\t<discount>]
@@ -161,10 +179,10 @@ class DatecsDP25Printer(FiscalPrinter):
             price = _fmt_amount(item.get("unit_price") or item.get("line_total") or 0)
             qty = _fmt_amount(item.get("quantity") or 1)
             data = f"{name}\tT{vat_group}\t{price}\t{qty}".encode("cp1250", errors="replace")
-            self._transport.execute(CMD_REGISTER_ITEM, data)
+            self._transport.execute(self._codes["register_item"], data)
 
         # Subtotal (optional; helps printing)
-        self._transport.execute(CMD_SUBTOTAL, b"")
+        self._transport.execute(self._codes["subtotal"], b"")
 
         # Register payments. If none provided, default to one cash
         # payment for the total.
@@ -179,10 +197,10 @@ class DatecsDP25Printer(FiscalPrinter):
             code = _PAYMENT_MAP.get(method, "0")
             amount = _fmt_amount(pay.get("amount") or 0)
             data = f"{code}\t{amount}".encode("ascii")
-            self._transport.execute(CMD_PAYMENT, data)
+            self._transport.execute(self._codes["payment"], data)
 
         # Close fiscal → device returns BF number in the data bytes.
-        reply = self._transport.execute(CMD_CLOSE_FISCAL)
+        reply = self._transport.execute(self._codes["close_fiscal"])
         bf_number = reply.data.decode("ascii", errors="replace").strip()
 
         return PrintResult(
@@ -197,9 +215,9 @@ class DatecsDP25Printer(FiscalPrinter):
         )
 
     def _x_report(self) -> PrintResult:
-        self._transport.execute(CMD_X_REPORT, b"0")
+        self._transport.execute(self._codes["x_report"], b"0")
         return PrintResult(success=True, data={"report": "X", "printed": True})
 
     def _z_report(self) -> PrintResult:
-        self._transport.execute(CMD_Z_REPORT, b"1")
+        self._transport.execute(self._codes["z_report"], b"1")
         return PrintResult(success=True, data={"report": "Z", "printed": True})

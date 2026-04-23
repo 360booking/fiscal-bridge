@@ -20,6 +20,37 @@ from typing import Optional
 
 from . import status as status_file
 
+
+def _mask_subprocess_windows() -> None:
+    """Suppress the cmd.exe flash that pops when we call subprocess
+    helpers (tasklist, schtasks, sc) from a windowless .exe. We
+    monkey-patch subprocess.Popen's __init__ to add CREATE_NO_WINDOW
+    + STARTUPINFO defaults on Windows."""
+    import os
+    import subprocess
+    if os.name != "nt":
+        return
+    CREATE_NO_WINDOW = 0x08000000
+    STARTF_USESHOWWINDOW = 0x00000001
+    SW_HIDE = 0
+
+    original_popen_init = subprocess.Popen.__init__
+
+    def patched_init(self, *args, **kwargs):
+        # Only patch if no explicit creationflags set — respect callers
+        # that know what they want.
+        creationflags = kwargs.get("creationflags", 0)
+        if creationflags == 0 and "creationflags" not in kwargs:
+            kwargs["creationflags"] = CREATE_NO_WINDOW
+        if "startupinfo" not in kwargs or kwargs.get("startupinfo") is None:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags = STARTF_USESHOWWINDOW
+            si.wShowWindow = SW_HIDE
+            kwargs["startupinfo"] = si
+        original_popen_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = patched_init
+
 log = logging.getLogger("bridge.tray")
 
 
@@ -65,6 +96,15 @@ def run_tray_with_loop(ws_loop) -> None:
     tray icon won't appear in the notification area.
     """
     import pystray
+
+    # Hide any Python/cmd console flicker on Windows: this .exe is
+    # built as a windowed binary (console=False) but when it spawns
+    # background threads that do subprocess calls (e.g. schtasks,
+    # tasklist, sc for the single-instance probe) Windows briefly
+    # pops a cmd.exe window unless we mask that with STARTUPINFO.
+    # We patch subprocess.Popen's defaults once per process so every
+    # call in this tray session is hidden.
+    _mask_subprocess_windows()
 
     # Start the WS loop in a daemon thread so Ctrl-C / tray Quit kills
     # the whole process cleanly.

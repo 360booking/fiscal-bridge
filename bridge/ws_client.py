@@ -20,10 +20,18 @@ from .printers import FiscalPrinter, PrintJob
 log = logging.getLogger("bridge.ws")
 
 
+# In-memory cache of the last protocol config the server pushed.
+# Merged into _build_printer() on every build. Default is empty so
+# the driver falls back to its compiled-in defaults.
+_server_protocol_config: dict = {}
+
+
 def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     """Look up the printer via the registry. Per-printer config is
-    constructed here from the cfg fields — adding brand X only needs
-    new fields on BridgeConfig + a new line in printers/registry.py.
+    merged from three sources (later wins):
+      1. BridgeConfig (local file — serial_port, baud, operator)
+      2. Server-pushed protocol config (_server_protocol_config)
+      3. Per-call overrides (none today)
     """
     printer_config = {
         "serial_port": cfg.serial_port,
@@ -31,6 +39,14 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
         "operator": getattr(cfg, "operator", "1"),
         "operator_password": getattr(cfg, "operator_password", "0000"),
     }
+    # Server-pushed knobs override the compiled-in defaults but not
+    # the local serial config (port/baud are physical to the tenant
+    # machine and not reasonably pushable from the cloud).
+    for k, v in _server_protocol_config.items():
+        if k in ("serial_port", "serial_baud"):
+            continue
+        printer_config[k] = v
+
     try:
         return printers.build(cfg.printer_model, printer_config)
     except KeyError as exc:
@@ -89,6 +105,7 @@ async def _run_once(cfg: BridgeConfig) -> None:
         }))
         status.write({"ws_connected": True})
         heartbeat_task = asyncio.create_task(_heartbeat_loop(ws))
+        printer_ref = {"p": printer}  # rebuilt whenever server pushes new config
         try:
             async for raw in ws:
                 try:
@@ -98,10 +115,20 @@ async def _run_once(cfg: BridgeConfig) -> None:
                 mtype = msg.get("type")
                 if mtype == "welcome":
                     log.info("Registered as bridge %s", msg.get("bridge_id"))
+                elif mtype == "config":
+                    # Server pushed new protocol tweaks. Rebuild the
+                    # printer so the next job uses the new knobs.
+                    global _server_protocol_config
+                    _server_protocol_config = msg.get("protocol") or {}
+                    log.info("Protocol config from server: %s", _server_protocol_config)
+                    try:
+                        printer_ref["p"] = _build_printer(cfg)
+                    except Exception as exc:
+                        log.warning("Rebuild with server config failed: %s", exc)
                 elif mtype == "heartbeat_ack":
                     pass
                 elif mtype == "job":
-                    await _handle_job(ws, printer, msg)
+                    await _handle_job(ws, printer_ref["p"], msg)
                 elif mtype == "error":
                     log.warning("Server error: %s", msg.get("error"))
                 else:
