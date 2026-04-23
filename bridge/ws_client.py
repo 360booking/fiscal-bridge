@@ -136,21 +136,48 @@ async def _handle_job(ws, printer: FiscalPrinter, msg: dict) -> None:
 
 
 async def run_forever() -> None:
-    """Reconnect loop with exponential backoff (capped at 60s)."""
+    """Reconnect loop with exponential backoff (capped at 60s).
+
+    Bails out (instead of retrying forever) on authentication errors —
+    if the server returns 403 or closes with code 4001/4403, the
+    token was revoked (admin hit "Deconectează" / "Reactivează").
+    Retrying in that state just spams the server with doomed attempts
+    and keeps the admin panel stuck in "offline".
+    """
     cfg = BridgeConfig.load()
     if not cfg.is_claimed():
         raise SystemExit("Bridge not enrolled. Run with --enroll=CODE first.")
 
     backoff = 1.0
+    auth_fail_count = 0
     while True:
         try:
             await _run_once(cfg)
-            # Clean disconnect = server revoked us or closed socket.
-            # Reset backoff on clean disconnect, we'll try to reconnect.
             backoff = 1.0
+            auth_fail_count = 0
         except asyncio.CancelledError:
             status.write({"ws_connected": False})
             raise
+        except websockets.InvalidStatusCode as exc:
+            status_code = getattr(exc, "status_code", 0)
+            if status_code in (401, 403):
+                auth_fail_count += 1
+                log.error(
+                    "Auth rejected by server (HTTP %s). The device_token has "
+                    "been revoked — probably an admin disconnected or re-enrolled. "
+                    "Fail #%d.",
+                    status_code, auth_fail_count,
+                )
+                status.write({
+                    "ws_connected": False,
+                    "last_error": f"HTTP {status_code} — token revoked. Re-enroll required.",
+                })
+                if auth_fail_count >= 3:
+                    log.error("Giving up — run with --enroll=<new code> to re-authenticate.")
+                    return
+            else:
+                log.warning("Connection lost (HTTP %s) — retrying in %.0fs", status_code, backoff)
+                status.write({"ws_connected": False, "last_error": f"HTTP {status_code}"})
         except Exception as exc:
             log.warning("Connection lost: %s — retrying in %.0fs", exc, backoff)
             status.write({"ws_connected": False, "last_error": str(exc)})
