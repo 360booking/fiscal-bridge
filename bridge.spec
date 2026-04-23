@@ -38,7 +38,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX compression off — Windows Defender treats UPX-packed
+    # binaries as "possible malware" and the PE loader sometimes
+    # rejects them with "Unsupported 16-bit application".
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,
