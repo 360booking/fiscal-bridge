@@ -14,7 +14,25 @@ from typing import Optional
 
 
 def config_dir() -> Path:
+    """Return the config directory. On Windows we prefer %PROGRAMDATA%
+    (machine-wide, readable by both the current user and LocalSystem —
+    the account the Windows service runs under) and fall back to
+    %LOCALAPPDATA% only when ProgramData isn't writable (rare)."""
     if platform.system() == "Windows":
+        # ProgramData is the right place for service-accessible config.
+        # LocalSystem has full access; normal users have read + write
+        # via the default ACL on ProgramData itself.
+        programdata = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+        candidate = Path(programdata) / "360booking-bridge"
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            # Quick write probe
+            probe = candidate / ".write-test"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except Exception:
+            pass
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
         return Path(base) / "360booking-bridge"
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
