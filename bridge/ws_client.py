@@ -13,7 +13,7 @@ from typing import Any
 import websockets
 
 from . import __version__
-from . import printers
+from . import printers, status
 from .config import BridgeConfig
 from .printers import FiscalPrinter, PrintJob
 
@@ -36,11 +36,30 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
         return printers.build("simulator", printer_config)
 
 
+def _probe_printer(cfg: BridgeConfig) -> dict:
+    """Quick connectivity check for the GUI status panel. Simulator
+    is always OK; serial printers open the port for ~100ms to verify
+    the device is reachable (doesn't print anything)."""
+    if (cfg.printer_model or "simulator").lower() == "simulator":
+        return {"printer_status": "ok", "printer_detail": "simulator"}
+    port = (cfg.serial_port or "").strip()
+    if not port:
+        return {"printer_status": "not_configured", "printer_detail": "serial port missing"}
+    try:
+        import serial
+        s = serial.Serial(port=port, baudrate=cfg.serial_baud or 9600, timeout=0.1)
+        s.close()
+        return {"printer_status": "ok", "printer_detail": f"{port} reachable"}
+    except Exception as exc:
+        return {"printer_status": "error", "printer_detail": f"{port}: {exc}"}
+
+
 async def _heartbeat_loop(ws, interval: float = 30.0):
     while True:
         await asyncio.sleep(interval)
         try:
             await ws.send(json.dumps({"type": "heartbeat"}))
+            status.write({"ws_connected": True})
         except websockets.ConnectionClosed:
             return
 
@@ -48,6 +67,16 @@ async def _heartbeat_loop(ws, interval: float = 30.0):
 async def _run_once(cfg: BridgeConfig) -> None:
     url = f"{cfg.websocket_url}?token={cfg.device_token}"
     log.info("Connecting to %s", cfg.websocket_url)
+    # Status snapshot before connect: process is up, printer probed,
+    # WS not yet connected.
+    status.write({
+        "ws_connected": False,
+        "printer_model": cfg.printer_model,
+        "bridge_id": cfg.bridge_id,
+        "tenant_id": cfg.tenant_id,
+        "version": __version__,
+        **_probe_printer(cfg),
+    })
     printer = _build_printer(cfg)
     async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
         await ws.send(json.dumps({
@@ -56,6 +85,7 @@ async def _run_once(cfg: BridgeConfig) -> None:
             "printer_model": cfg.printer_model,
             "os_info": f"{platform.system()} {platform.release()} {platform.version()}",
         }))
+        status.write({"ws_connected": True})
         heartbeat_task = asyncio.create_task(_heartbeat_loop(ws))
         try:
             async for raw in ws:
@@ -119,8 +149,10 @@ async def run_forever() -> None:
             # Reset backoff on clean disconnect, we'll try to reconnect.
             backoff = 1.0
         except asyncio.CancelledError:
+            status.write({"ws_connected": False})
             raise
         except Exception as exc:
             log.warning("Connection lost: %s — retrying in %.0fs", exc, backoff)
+            status.write({"ws_connected": False, "last_error": str(exc)})
         await asyncio.sleep(backoff)
         backoff = min(60.0, backoff * 1.7)

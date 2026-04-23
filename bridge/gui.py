@@ -20,7 +20,7 @@ from typing import Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from . import __version__
+from . import __version__, status as status_file
 from .config import BridgeConfig, config_dir
 from .printers import available_models
 
@@ -234,9 +234,30 @@ class StatusPanel:
         ttk.Label(f, text="360booking Fiscal Bridge",
                   font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 12))
 
-        self.state_var = tk.StringVar(value="…")
-        state_lbl = ttk.Label(f, textvariable=self.state_var, font=("Segoe UI", 10, "bold"))
-        state_lbl.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        # Live indicators — three rows, each with a colored dot + label.
+        live_box = ttk.LabelFrame(f, text=" Stare ", padding=10)
+        live_box.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 12))
+
+        self.dot_process = tk.StringVar(value="●")
+        self.dot_ws = tk.StringVar(value="●")
+        self.dot_printer = tk.StringVar(value="●")
+        self.lbl_process = tk.StringVar(value="Proces: verific…")
+        self.lbl_ws = tk.StringVar(value="Conexiune 360booking: verific…")
+        self.lbl_printer = tk.StringVar(value="Casa de marcat: verific…")
+
+        def _dot_line(row: int, dot_var: tk.StringVar, lbl_var: tk.StringVar):
+            ttk.Label(live_box, textvariable=dot_var, font=("Segoe UI", 12, "bold"),
+                      foreground="#999", width=2).grid(row=row, column=0, sticky="w")
+            ttk.Label(live_box, textvariable=lbl_var).grid(row=row, column=1, sticky="w")
+
+        _dot_line(0, self.dot_process, self.lbl_process)
+        _dot_line(1, self.dot_ws, self.lbl_ws)
+        _dot_line(2, self.dot_printer, self.lbl_printer)
+        self._dots = {
+            "process": (self.dot_process, None),
+            "ws": (self.dot_ws, None),
+            "printer": (self.dot_printer, None),
+        }
 
         rows = [
             ("Bridge ID:", (cfg.bridge_id or "")[:24] + "…" if cfg.bridge_id else "(not set)"),
@@ -244,7 +265,6 @@ class StatusPanel:
             ("Imprimantă:", cfg.printer_model or "simulator"),
             ("Port COM:", cfg.serial_port or "(nu e setat)"),
             ("Versiune bridge:", __version__),
-            ("Config dir:", str(config_dir())),
             ("Log file:", str(config_dir() / "bridge.log")),
         ]
         for i, (label, value) in enumerate(rows, start=2):
@@ -259,16 +279,74 @@ class StatusPanel:
         ttk.Button(btn_bar, text="Reactivează", command=self._reenroll).grid(row=0, column=3, padx=4)
         ttk.Button(btn_bar, text="Dezinstalează", command=self._uninstall).grid(row=0, column=4, padx=4)
 
+    @staticmethod
+    def _set_dot(var: tk.StringVar, lbl_var: tk.StringVar,
+                 ok: Optional[bool], text: str,
+                 dot_label: Optional[ttk.Label] = None) -> None:
+        # ok=True → green, False → red, None → gray (unknown)
+        color = "#2e7d32" if ok else ("#c62828" if ok is False else "#999")
+        mark = "●"
+        var.set(mark)
+        lbl_var.set(text)
+        # Color is set by re-styling the label — tkinter doesn't let us
+        # change Label foreground via StringVar, so we keep the label
+        # gray and encode state in unicode: green ●, red ✗, gray ○.
+        if ok is True:
+            var.set("●")
+        elif ok is False:
+            var.set("✗")
+        else:
+            var.set("○")
+
     def _refresh(self) -> None:
         running_proc = _bridge_process_running()
         task = _task_state()
+        stat = status_file.read()
+
+        # --- Process indicator ---
         if running_proc:
-            self.state_var.set("✓ Rulează în background")
+            self._set_dot(self.dot_process, self.lbl_process, True,
+                          "Proces: rulează")
         elif task == "ready":
-            self.state_var.set('Instalat, va porni la login. Click "Porneste acum" pentru start imediat.')
+            self._set_dot(self.dot_process, self.lbl_process, None,
+                          'Proces: oprit (instalat, pornește la login)')
         else:
-            self.state_var.set("✗ Oprit")
-        self.root.after(3000, self._refresh)
+            self._set_dot(self.dot_process, self.lbl_process, False,
+                          "Proces: oprit")
+
+        # --- WebSocket / server indicator ---
+        if not running_proc:
+            self._set_dot(self.dot_ws, self.lbl_ws, None,
+                          "Conexiune 360booking: — (proces oprit)")
+        elif stat and not stat.get("stale") and stat.get("ws_connected"):
+            self._set_dot(self.dot_ws, self.lbl_ws, True,
+                          "Conexiune 360booking: activă")
+        else:
+            detail = stat.get("last_error") if stat else "fără răspuns"
+            self._set_dot(self.dot_ws, self.lbl_ws, False,
+                          f"Conexiune 360booking: picată ({detail or 'timeout'})")
+
+        # --- Printer indicator ---
+        if not running_proc:
+            self._set_dot(self.dot_printer, self.lbl_printer, None,
+                          "Casa de marcat: — (proces oprit)")
+        elif stat and not stat.get("stale"):
+            ps = stat.get("printer_status")
+            pd = stat.get("printer_detail") or ""
+            if ps == "ok":
+                self._set_dot(self.dot_printer, self.lbl_printer, True,
+                              f"Casa de marcat: conectată ({pd})")
+            elif ps == "not_configured":
+                self._set_dot(self.dot_printer, self.lbl_printer, None,
+                              "Casa de marcat: neconfigurată (adaugă port COM)")
+            else:
+                self._set_dot(self.dot_printer, self.lbl_printer, False,
+                              f"Casa de marcat: eroare ({pd})")
+        else:
+            self._set_dot(self.dot_printer, self.lbl_printer, None,
+                          "Casa de marcat: status indisponibil")
+
+        self.root.after(2000, self._refresh)
 
     def _start(self) -> None:
         try:
