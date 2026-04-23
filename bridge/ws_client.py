@@ -13,18 +13,27 @@ from typing import Any
 import websockets
 
 from . import __version__
+from . import printers
 from .config import BridgeConfig
-from .printers import FiscalPrinter, PrintJob, SimulatorPrinter
-from .printers.datecs_dp25 import DatecsDP25Printer
+from .printers import FiscalPrinter, PrintJob
 
 log = logging.getLogger("bridge.ws")
 
 
 def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
-    model = (cfg.printer_model or "simulator").lower()
-    if model == "datecs_dp25":
-        return DatecsDP25Printer({"serial_port": cfg.serial_port, "serial_baud": cfg.serial_baud})
-    return SimulatorPrinter()
+    """Look up the printer via the registry. Per-printer config is
+    constructed here from the cfg fields — adding brand X only needs
+    new fields on BridgeConfig + a new line in printers/registry.py.
+    """
+    printer_config = {
+        "serial_port": cfg.serial_port,
+        "serial_baud": cfg.serial_baud,
+    }
+    try:
+        return printers.build(cfg.printer_model, printer_config)
+    except KeyError as exc:
+        log.error("%s — falling back to simulator", exc)
+        return printers.build("simulator", printer_config)
 
 
 async def _heartbeat_loop(ws, interval: float = 30.0):

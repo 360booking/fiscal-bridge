@@ -64,3 +64,55 @@ python -m bridge --enroll=<code> --printer=simulator --run
 Push a tag `v0.1.0`; GitHub Actions builds the .exe and publishes it
 as a release asset. The 360booking server redirects
 `/api/fiscal-bridge/download` to the latest release automatically.
+
+## Adding support for a new cash register
+
+The `bridge/printers/` layer is a plugin registry — adding a new
+brand or model never requires touching existing printers or the
+WebSocket client.
+
+Steps to add, say, `eltrade_b1`:
+
+1. Create `bridge/printers/eltrade_b1.py`:
+
+```python
+from .base import FiscalPrinter, PrintJob, PrintResult
+
+class EltradeB1Printer(FiscalPrinter):
+    model = "eltrade_b1"
+
+    def handle(self, job: PrintJob) -> PrintResult:
+        if job.kind == "print_receipt":
+            ...  # talk to the device via pyserial / hidapi / etc.
+            return PrintResult(success=True, data={"receipt_number": "..."})
+        ...
+```
+
+2. Register it in `bridge/printers/registry.py`:
+
+```python
+REGISTRY = {
+    ...
+    "eltrade_b1": "bridge.printers.eltrade_b1:EltradeB1Printer",
+}
+```
+
+3. Ship a new tag (`v0.1.2`) → the `.exe` now supports the new model.
+   Tenants that want it select `--printer=eltrade_b1` at enrollment.
+
+4. (Optional) Update the Python SDK deps in `requirements.txt` if the
+   new brand needs an extra transport library.
+
+The backend's fiscal driver (`bridge_agent`) doesn't care about the
+model — it just forwards print jobs over the WebSocket. Same `PrintJob`
+shape for every brand, same `PrintResult` response. This keeps the
+surface area of adding models to a single file per brand.
+
+**Useful shared infrastructure** already available:
+
+- `bridge/printers/datecs_fp.py` — FP-700 serial framing. Datecs
+  DP-55, DP-150, FP-550, FP-2000, FMP-10 etc. all share this
+  protocol; just subclass `DatecsFPTransport` and override command
+  codes (see `datecs_dp25.py` as an example).
+- `bridge/printers/simulator.py` — reference implementation for the
+  full `FiscalPrinter` contract; copy it and replace the body.

@@ -108,9 +108,10 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging()
     p = argparse.ArgumentParser(prog="360booking-bridge")
     p.add_argument("--enroll", metavar="CODE", help="One-time enrollment code from the admin UI")
+    from .printers import available_models
     p.add_argument("--printer", default="simulator",
-                   choices=["simulator", "datecs_dp25"],
-                   help="Printer backend (default: simulator)")
+                   choices=available_models(),
+                   help=f"Printer backend (default: simulator). Registered: {', '.join(available_models())}")
     p.add_argument("--server", default="https://360booking.ro",
                    help="Server base URL (default: https://360booking.ro)")
     p.add_argument("--run", action="store_true", help="Run the WebSocket loop")
