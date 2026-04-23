@@ -47,23 +47,41 @@ jobs:
       - name: Build .exe
         run: pyinstaller bridge.spec --clean --noconfirm
 
-      - name: Rename artifact
+      - name: Compute release tag
+        id: tag
         shell: pwsh
         run: |
-          Move-Item dist\360booking-bridge.exe dist\360booking-bridge-setup.exe
+          $ref = "${{ github.ref }}"
+          if ($ref -like "refs/tags/*") {
+            $tag = $ref -replace "refs/tags/", ""
+          } else {
+            $tag = "dev"
+          }
+          Write-Host "tag=$tag"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Rename artifact with version
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $versioned = "dist\360booking-bridge-setup-$tag.exe"
+          $stable = "dist\360booking-bridge-setup.exe"
+          Move-Item dist\360booking-bridge.exe $versioned
+          Copy-Item $versioned $stable
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 360booking-bridge-setup
-          path: dist/360booking-bridge-setup.exe
+          name: 360booking-bridge-setup-${{ steps.tag.outputs.tag }}
+          path: |
+            dist/360booking-bridge-setup-${{ steps.tag.outputs.tag }}.exe
+            dist/360booking-bridge-setup.exe
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          # Falls back to GITHUB_TOKEN if the PAT isn't set — lets the
-          # workflow work both with org-level "read-only" policies
-          # (using GH_RELEASE_TOKEN) and with default permissive setups.
           token: ${{ secrets.GH_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          files: dist/360booking-bridge-setup.exe
+          files: |
+            dist/360booking-bridge-setup-${{ steps.tag.outputs.tag }}.exe
+            dist/360booking-bridge-setup.exe
