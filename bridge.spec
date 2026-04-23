@@ -23,6 +23,8 @@ if os.path.exists("nssm.exe"):
 hidden = []
 hidden += collect_submodules("bridge")
 hidden += collect_submodules("websockets")
+hidden += collect_submodules("pystray")
+hidden += collect_submodules("PIL")
 hidden += [
     # explicit list matches printers/registry.py REGISTRY keys
     "bridge",
@@ -32,6 +34,8 @@ hidden += [
     "bridge.ws_client",
     "bridge.service",
     "bridge.status",
+    "bridge.tray",
+    "bridge.upgrade",
     "bridge.printers",
     "bridge.printers.base",
     "bridge.printers.registry",
@@ -49,6 +53,10 @@ hidden += [
     "tkinter.ttk",
     "tkinter.messagebox",
     "tkinter.font",
+    # tray + image deps
+    "pystray._win32",
+    "PIL.Image",
+    "PIL.ImageDraw",
 ]
 
 a = Analysis(
@@ -80,7 +88,10 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    # Windowed — no console window on double-click. CLI commands
+    # still work when launched from an existing cmd.exe (output
+    # goes to the log file via the file handler in main.py).
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

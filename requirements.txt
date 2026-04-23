@@ -1,2 +1,4 @@
 websockets>=12.0,<13.0
 pyserial>=3.5,<4.0
+pystray>=0.19,<1.0
+pillow>=10.0,<12.0

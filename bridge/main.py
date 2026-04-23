@@ -73,12 +73,10 @@ def _log_path() -> Path:
 
 
 def _setup_logging(verbose: bool = False) -> None:
-    """Console + file logging. File is always written so users can
-    attach it to a support request when things break."""
+    """File logging always; stdout only when a real console is attached.
+    The windowed .exe has no console, so stdout handler is a no-op there."""
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    # Clear any pre-existing handlers (avoids duplicate lines when
-    # called twice from --enroll --run flow).
     root.handlers.clear()
 
     fmt = logging.Formatter(
@@ -90,10 +88,14 @@ def _setup_logging(verbose: bool = False) -> None:
     fh.setFormatter(fmt)
     root.addHandler(fh)
 
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.INFO)
-    sh.setFormatter(fmt)
-    root.addHandler(sh)
+    # Only add a stdout handler when we actually have a console — the
+    # windowed build points stdout at nul and the handler would waste
+    # cycles formatting lines for nobody.
+    if sys.stdout and sys.stdout.isatty():
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(logging.INFO)
+        sh.setFormatter(fmt)
+        root.addHandler(sh)
 
 
 def _pause_on_error(exc: BaseException) -> None:
@@ -343,16 +345,28 @@ def _check_serial_port(port: str) -> None:
 
 
 def _run_loop() -> None:
-    """Wrap the asyncio loop with a "running" status line, so the user
-    sees confirmation when the WebSocket is up."""
-    print()
-    print(_c("32", f"  {_c('1', 'Bridge is running.')}  Press Ctrl+C to stop."))
-    print()
-    try:
-        asyncio.run(run_forever())
-    except KeyboardInterrupt:
+    """Run the WebSocket loop. In windowed (no-console) builds we route
+    through the tray icon so the user sees a visible indicator in the
+    notification area; CLI runs (with a real terminal) stick to the
+    plain loop so output still shows up in the window."""
+    if sys.stdout and sys.stdout.isatty():
         print()
-        _info("EXIT", "stopped by user (Ctrl+C)")
+        print(_c("32", f"  {_c('1', 'Bridge is running.')}  Press Ctrl+C to stop."))
+        print()
+        try:
+            asyncio.run(run_forever())
+        except KeyboardInterrupt:
+            print()
+            _info("EXIT", "stopped by user (Ctrl+C)")
+        return
+    # Windowed / background build: start the tray icon + WS loop.
+    try:
+        from .tray import run_tray_with_loop
+        run_tray_with_loop(lambda: asyncio.run(run_forever()))
+    except Exception as exc:
+        log = logging.getLogger("bridge.main")
+        log.exception("Tray startup failed, falling back to headless loop: %s", exc)
+        asyncio.run(run_forever())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -368,7 +382,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="Serial port of the fiscal printer (e.g. COM3 on Windows, /dev/ttyUSB0 on Linux).")
     p.add_argument("--serial-baud", type=int, default=115200,
                    help="Serial baud rate (default: 115200)")
-    p.add_argument("--run", action="store_true", help="Run the WebSocket loop (foreground, with console)")
+    p.add_argument("--run", action="store_true", help="Run the WebSocket loop with tray icon (or console if launched from a terminal)")
+    p.add_argument("--upgrade", action="store_true",
+                   help="Download the latest .exe from GitHub, stop current bridge, relaunch new version")
     p.add_argument("--background", action="store_true",
                    help="Start the bridge in a hidden background process and exit "
                         "the console. Combine with --run. On Windows uses a VBS "
@@ -388,6 +404,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"(Logging setup failed: {exc}. Continuing in stdout-only mode.)")
 
     try:
+        if args.upgrade:
+            from .upgrade import run_upgrade
+            run_upgrade()
+            return 0
+
         if args.uninstall:
             _uninstall_autorun()
             return 0
@@ -436,15 +457,19 @@ def main(argv: list[str] | None = None) -> int:
                 _run_loop()
             return 0
 
-        # No args → launch the GUI. Lets tenants double-click the
-        # .exe from Explorer and get a small window to paste the code
-        # into instead of using the CLI.
+        # No args → double-click from Explorer.
+        #  - If enrolled: drop into tray + WS loop so the bridge keeps
+        #    running; user can open the GUI from the tray menu.
+        #  - If not enrolled: open the enrollment GUI.
+        cfg = BridgeConfig.load()
+        if cfg.is_claimed():
+            _run_loop()
+            return 0
         try:
             from .gui import run_gui
             return run_gui()
         except Exception as exc:
             _fail("GUI", f"could not start: {exc}")
-            _info("HINT", "Run with --help to see CLI options.")
             return 2
     except SystemExit:
         raise
