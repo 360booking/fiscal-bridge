@@ -1,30 +1,30 @@
-"""Datecs FP-700 / FP-2000 family ASCII protocol.
-
-This is the base-class wire protocol used by Datecs fiscal devices
-(DP-25, DP-55, FP-550, etc.). Per-model differences live in subclasses
-that override command codes and data formats.
+"""Datecs FP-700 / FP-2000 family ASCII protocol (DP-25, DP-55, etc.).
 
 Frame layout (bytes):
-  STX     0x01
-  LEN     4 ASCII digits (0x20-0x7F), total_frame_len_offset_by_0x20
-  SEQ     1 ASCII byte (0x20-0x7F) — incrementing per request
-  CMD     4 ASCII hex digits — command code
-  DATA    tab-separated payload (0x09 separator where applicable)
-  POST    0x05
-  BCC     4 ASCII hex digits — sum-check (see _calc_bcc)
-  ETX     0x03
+  STX    0x01
+  LEN    4 bytes — each byte = (nibble & 0xF) + 0x30
+  SEQ    1 byte, 0x20-0x7F, incremented per request
+  CMD    1 byte command code, raw binary
+  DATA   payload bytes (CP1250 for RO diacritics)
+  POST   0x05
+  BCC    4 bytes XOR checksum — each byte = (nibble & 0xF) + 0x30
+  ETX    0x03
 
-Reference: public Datecs FP-700 integrator manual, sections 2 and 3.
-If you have the official Datecs PDF, the canonical source is §5-6 of
-the DP-25 programmer's manual — field orders differ slightly between
-models and this module exposes overridable constants for that.
+The key subtlety: LEN and BCC are NOT ASCII hex. Each nibble is
+offset by 0x30 so nibble 10 encodes as byte 0x3A (':'), not 'A'.
+
+The checksum runs XOR across SEQ..POST (inclusive).
+
+Reference: Datecs FP-700 integrator manual §3. Field widths may differ
+on exotic firmwares — the constants near the top of the file are
+overridable via the `config` dict if we ever hit one.
 """
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import serial
 
@@ -41,26 +41,27 @@ NAK = 0x15
 ACK = 0x06
 
 
-# ---- Low-level framing --------------------------------------------------
+def _encode_4nibbles(value: int) -> bytes:
+    """Datecs nibble encoding: 4 bytes, each = (nibble & 0xF) + 0x30.
+    Example: 0x0123 → b'0123' (0x30 0x31 0x32 0x33)
+             0x00AB → b'00:;' (0x30 0x30 0x3A 0x3B)
+    """
+    return bytes([
+        ((value >> 12) & 0xF) + 0x30,
+        ((value >> 8) & 0xF) + 0x30,
+        ((value >> 4) & 0xF) + 0x30,
+        (value & 0xF) + 0x30,
+    ])
 
-def _calc_bcc(data: bytes) -> bytes:
-    """Sum of bytes mod 0xFFFF, rendered as 4 ASCII hex uppercase."""
-    total = sum(data) & 0xFFFF
-    hex_str = f"{total:04X}"
-    # BCC bytes are each in the 0x30–0x3F range? No — standard hex digits
-    # 0x30-0x39, 0x41-0x46. Datecs expects plain ASCII hex.
-    return hex_str.encode("ascii")
 
-
-def _encode_len(frame_body_len: int) -> bytes:
-    """LEN is 4 ASCII bytes representing len + 0x20 each."""
-    # Datecs encoding: len in 4 ASCII digits, each byte = (nibble + 0x20)?
-    # Different sources disagree. Using the FP-700 integrator docs: LEN is
-    # the length of SEQ+CMD+DATA+POST, transmitted as 4 ASCII characters
-    # each in 0x20..0x7F, representing a base-32ish encoded value. In
-    # practice most drivers just emit 4 hex digits. Keep it hex — most
-    # Datecs devices accept that dialect.
-    return f"{frame_body_len:04X}".encode("ascii")
+def _calc_bcc(payload: bytes) -> bytes:
+    """XOR checksum across `payload`. 16-bit result, encoded per the
+    Datecs 4-nibble convention. In practice the cumulative XOR of the
+    bytes is 0-255 but we pad to 16 bits so the encoding stays 4 bytes."""
+    x = 0
+    for b in payload:
+        x ^= b
+    return _encode_4nibbles(x)
 
 
 class DatecsFPError(Exception):
@@ -71,23 +72,21 @@ class DatecsFPError(Exception):
 class FrameResponse:
     cmd: int
     data: bytes
-    status: bytes  # 6 status bytes from the device
+    status: bytes          # 6 status bytes from the device
     raw: bytes
 
 
 class DatecsFPTransport:
-    """Opens the COM port, sends framed commands, reads framed replies.
+    """Opens the COM port, sends framed commands, reads framed replies."""
 
-    Thread-safe only via a single instance — the serial handle itself
-    is not thread-safe. Bridge calls it serially from one worker.
-    """
-
-    def __init__(self, port: str, baud: int = 115200, timeout: float = 3.0):
+    def __init__(self, port: str, baud: int = 9600, timeout: float = 3.0):
+        # FP-700 family defaults to 9600 baud on the serial line; we
+        # honour whatever the caller configured in BridgeConfig.
         self.port = port
         self.baud = baud
         self.timeout = timeout
         self._ser: Optional[serial.Serial] = None
-        self._seq = 0x20
+        self._seq = 0x1F  # first _next_seq() returns 0x20
 
     # -- lifecycle --
 
@@ -102,6 +101,9 @@ class DatecsFPTransport:
             stopbits=1,
             timeout=self.timeout,
         )
+        # Flush any stale device chatter from a previous aborted txn.
+        self._ser.reset_input_buffer()
+        self._ser.reset_output_buffer()
 
     def close(self) -> None:
         if self._ser and self._ser.is_open:
@@ -114,16 +116,23 @@ class DatecsFPTransport:
         return self._seq
 
     def _build_frame(self, cmd: int, data: bytes) -> bytes:
-        seq = bytes([self._next_seq()])
-        cmd_bytes = f"{cmd:04X}".encode("ascii")
-        body = seq + cmd_bytes + data + bytes([POST])
-        length = _encode_len(len(body))
-        frame = bytes([STX]) + length + body
-        bcc = _calc_bcc(frame[1:])  # over LEN..POST (exclude STX)
-        return frame + bcc + bytes([ETX])
+        seq = self._next_seq()
+        # Body = SEQ + CMD + DATA + POST
+        body = bytes([seq, cmd]) + data + bytes([POST])
+        # LEN is the length of the body, encoded per nibble convention.
+        length_enc = _encode_4nibbles(len(body))
+        # BCC runs over LEN + body (i.e. everything after STX, before BCC itself).
+        bcc_target = length_enc + body
+        bcc = _calc_bcc(bcc_target)
+        return bytes([STX]) + length_enc + body + bcc + bytes([ETX])
 
     def _read_frame(self) -> bytes:
-        """Read one complete frame ending at ETX, skipping NAK/SYN."""
+        """Read one complete frame ending at ETX.
+
+        Accepts NAK / SYN as in-band signals: NAK means the device
+        rejected our last write (re-raise as DatecsFPError), SYN is a
+        "processing, wait" ping and resets the deadline.
+        """
         if not self._ser:
             raise DatecsFPError("Port not open")
         buf = bytearray()
@@ -132,18 +141,19 @@ class DatecsFPTransport:
             b = self._ser.read(1)
             if not b:
                 continue
-            if b[0] == SYN:
-                # Device asks for more time — extend deadline
+            byte = b[0]
+            if byte == SYN:
                 deadline = time.monotonic() + self.timeout
                 continue
-            if b[0] == NAK:
+            if byte == NAK:
+                logger.warning("Device returned NAK — frame rejected")
                 raise DatecsFPError("Device NAK")
-            if b[0] == STX:
+            if byte == STX:
                 buf = bytearray()
                 continue
-            if b[0] == ETX:
+            if byte == ETX:
                 return bytes(buf)
-            buf.append(b[0])
+            buf.append(byte)
         raise DatecsFPError(f"Frame timeout after {self.timeout}s")
 
     # -- send/receive --
@@ -152,20 +162,26 @@ class DatecsFPTransport:
         if not self._ser:
             raise DatecsFPError("Port not open")
         frame = self._build_frame(cmd, data)
-        logger.debug("→ %s", frame.hex())
+        # INFO-level so the bytes are visible without --verbose.
+        logger.info("→ cmd=0x%02X data=%r  frame=%s", cmd, data, frame.hex())
         self._ser.write(frame)
         self._ser.flush()
-        raw = self._read_frame()
-        logger.debug("← %s", raw.hex())
-        # raw = LEN(4) + SEQ(1) + CMD(4) + DATA + POST + STATUS(6) + BCC(4)
-        if len(raw) < 4 + 1 + 4 + 1 + 6 + 4:
-            raise DatecsFPError(f"Short frame: {raw!r}")
-        cmd_echo = int(raw[5:9].decode("ascii", errors="replace"), 16)
-        # Find POST separator
         try:
-            post_idx = raw.index(POST, 9)
+            raw = self._read_frame()
+        except DatecsFPError as exc:
+            # Dump anything that came back before the error
+            pending = self._ser.read(64) if self._ser.in_waiting else b""
+            logger.info("← (error) %s  pending=%s", exc, pending.hex())
+            raise
+        logger.info("← raw=%s", raw.hex())
+        # raw = LEN(4) + SEQ(1) + CMD(1) + DATA + POST + STATUS(6) + BCC(4)
+        if len(raw) < 4 + 1 + 1 + 1 + 6 + 4:
+            raise DatecsFPError(f"Short frame: {raw!r}")
+        cmd_echo = raw[5]
+        try:
+            post_idx = raw.index(POST, 6)
         except ValueError:
-            raise DatecsFPError("Malformed reply — no POST")
-        data_bytes = raw[9:post_idx]
+            raise DatecsFPError("Malformed reply — no POST marker")
+        data_bytes = raw[6:post_idx]
         status = raw[post_idx + 1 : post_idx + 7]
         return FrameResponse(cmd=cmd_echo, data=data_bytes, status=status, raw=raw)
