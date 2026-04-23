@@ -27,6 +27,14 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
+      - name: Download NSSM (for Windows Service install)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile nssm.zip
+          Expand-Archive -Path nssm.zip -DestinationPath nssm-tmp -Force
+          Copy-Item nssm-tmp/nssm-2.24/win64/nssm.exe -Destination nssm.exe
+          Get-Item nssm.exe | Format-List
+
       - name: Build .exe
         run: pyinstaller bridge.spec --clean --noconfirm
 

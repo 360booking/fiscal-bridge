@@ -180,18 +180,14 @@ def _write_hidden_launcher(exe_path: str) -> Path:
     return vbs
 
 
-def _install_autorun() -> None:
+def _install_scheduled_task() -> bool:
+    """Fallback installer that doesn't need admin — registers a
+    per-user scheduled task via schtasks. Runs at logon with a hidden
+    VBS launcher so no console window appears."""
     import subprocess
-    if platform.system() != "Windows":
-        _info("AUTORUN", "Skipped — Windows-only in this build.")
-        _info("HINT", "On Linux/macOS, run `360booking-bridge --run` under systemd/launchd.")
-        return
     exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
     vbs = _write_hidden_launcher(exe)
     _ok("AUTORUN", f"hidden launcher → {vbs}")
-    # No /RL HIGHEST — we don't need elevation. Serial + WebSocket work
-    # as an ordinary user, and /RL HIGHEST silently fails if the CMD
-    # isn't launched as Administrator.
     cmd = [
         "schtasks", "/Create", "/F",
         "/SC", "ONLOGON",
@@ -200,10 +196,55 @@ def _install_autorun() -> None:
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
-        _ok("AUTORUN", "scheduled task '360bookingFiscalBridge' registered")
-        _info("AUTORUN", "runs at every user login, no console window")
+        _ok("AUTORUN", "scheduled task '360bookingFiscalBridge' registered (runs at login)")
+        return True
     except subprocess.CalledProcessError as exc:
         _fail("AUTORUN", (exc.stderr or exc.stdout or str(exc)).strip())
+        return False
+
+
+def _install_autorun() -> None:
+    """Prefer a real Windows service (robust across logout / reboot /
+    crash). Fall back to a per-user scheduled task if admin elevation
+    is declined or NSSM isn't bundled in this build."""
+    if platform.system() != "Windows":
+        _info("AUTORUN", "Skipped — Windows-only in this build.")
+        _info("HINT", "On Linux/macOS, run `360booking-bridge --run` under systemd/launchd.")
+        return
+
+    from . import service
+
+    exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+
+    if service.is_admin():
+        _info("AUTORUN", "Admin detected — installing as Windows Service (most robust)")
+        ok, msg = service.install_service(exe)
+        if ok:
+            _ok("AUTORUN", f"Windows Service: {msg}")
+            _info("AUTORUN", "Starts at BOOT (before login), survives logout, auto-restarts on crash")
+            return
+        _fail("AUTORUN", f"Service install failed: {msg}")
+        _info("AUTORUN", "Falling back to scheduled task (per-user)")
+        _install_scheduled_task()
+        return
+
+    # Not admin — try to elevate, unless the user has already been
+    # round-tripped through UAC (in which case we'd loop).
+    if os.environ.get("FB_NO_ELEVATE") != "1":
+        _info("AUTORUN", "Requesting admin to install as Windows Service…")
+        # Re-launch with the SAME args, plus an env marker so the
+        # elevated copy doesn't try to elevate again if anything
+        # strange happens.
+        new_env_args = list(sys.argv[1:])
+        os.environ["FB_NO_ELEVATE"] = "1"
+        if service.relaunch_as_admin(new_env_args):
+            _ok("AUTORUN", "Relaunched with admin rights — this window will close.")
+            _info("AUTORUN", "Service installation continues in the elevated window.")
+            sys.exit(0)
+        _fail("AUTORUN", "UAC elevation declined")
+
+    _info("AUTORUN", "Falling back to scheduled task (per-user, less robust)")
+    _install_scheduled_task()
 
 
 def _start_hidden_now() -> None:
@@ -239,14 +280,25 @@ def _uninstall_autorun() -> None:
     if platform.system() != "Windows":
         _info("AUTORUN", "Skipped (non-Windows).")
         return
-    try:
-        subprocess.run(
-            ["schtasks", "/Delete", "/F", "/TN", "360bookingFiscalBridge"],
-            check=True, capture_output=True, text=True,
-        )
+    # Try both — service + scheduled task — since we don't know which
+    # install path the user took. Service removal needs admin.
+    from . import service
+    if service.service_state() != "missing":
+        if service.is_admin():
+            ok, msg = service.uninstall_service()
+            (_ok if ok else _fail)("AUTORUN", f"Windows Service: {msg}")
+        else:
+            _info("AUTORUN", "Windows Service detected — needs admin to uninstall")
+            if service.relaunch_as_admin():
+                sys.exit(0)
+    r = subprocess.run(
+        ["schtasks", "/Delete", "/F", "/TN", "360bookingFiscalBridge"],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0:
         _ok("AUTORUN", "scheduled task removed")
-    except subprocess.CalledProcessError as exc:
-        _info("AUTORUN", f"nothing to uninstall: {(exc.stderr or exc.stdout or '').strip()}")
+    else:
+        _info("AUTORUN", "no scheduled task to remove")
 
 
 def _check_serial_port(port: str) -> None:

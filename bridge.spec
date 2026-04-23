@@ -3,9 +3,18 @@
 
 Produces a single-file Windows .exe called `360booking-bridge.exe`.
 """
+import os
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+
+# Bundle NSSM if it's present next to the spec (downloaded by the
+# GitHub Action before this spec runs). At runtime the bridge
+# extracts it from _MEIPASS to %LocalAppData% so service install /
+# uninstall can find it.
+datas = []
+if os.path.exists("nssm.exe"):
+    datas.append(("nssm.exe", "."))
 
 # The printer registry loads modules by string path via importlib,
 # which PyInstaller can't trace. Belt + suspenders: we call
@@ -21,6 +30,8 @@ hidden += [
     "bridge.main",
     "bridge.gui",
     "bridge.ws_client",
+    "bridge.service",
+    "bridge.status",
     "bridge.printers",
     "bridge.printers.base",
     "bridge.printers.registry",
@@ -44,7 +55,7 @@ a = Analysis(
     ["run_bridge.py"],
     pathex=["."],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
