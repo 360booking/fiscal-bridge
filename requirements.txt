@@ -1,0 +1,2 @@
+websockets>=12.0,<13.0
+pyserial>=3.5,<4.0
