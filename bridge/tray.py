@@ -23,9 +23,15 @@ from . import status as status_file
 
 def _mask_subprocess_windows() -> None:
     """Suppress the cmd.exe flash that pops when we call subprocess
-    helpers (tasklist, schtasks, sc) from a windowless .exe. We
-    monkey-patch subprocess.Popen's __init__ to add CREATE_NO_WINDOW
-    + STARTUPINFO defaults on Windows."""
+    helpers (tasklist, schtasks, sc, nssm) from a windowless .exe.
+
+    We monkey-patch subprocess.Popen.__init__ so every call in the
+    tray session gets CREATE_NO_WINDOW + STARTUPINFO.wShowWindow=SW_HIDE
+    EXCEPT when the command is a known GUI app the user actually wants
+    to see (notepad for the log, wscript for the scheduled-task
+    launcher, explorer for open-folder). Without the whitelist the
+    "Deschide log" button launched notepad hidden and it looked like
+    nothing happened."""
     import os
     import subprocess
     if os.name != "nt":
@@ -34,19 +40,37 @@ def _mask_subprocess_windows() -> None:
     STARTF_USESHOWWINDOW = 0x00000001
     SW_HIDE = 0
 
+    # Leave these visible even when spawned from the tray process.
+    GUI_WHITELIST = (
+        "notepad", "notepad.exe",
+        "explorer", "explorer.exe",
+        "wscript", "wscript.exe",
+        "cmd",  # someone clicked "open console"
+    )
+
+    def _is_gui(args, kwargs) -> bool:
+        cmd = args[0] if args else kwargs.get("args")
+        first = None
+        if isinstance(cmd, (list, tuple)) and cmd:
+            first = cmd[0]
+        elif isinstance(cmd, str):
+            first = cmd.split()[0] if cmd else ""
+        first_lc = str(first or "").lower()
+        # Strip any path component
+        basename = first_lc.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        return basename in GUI_WHITELIST
+
     original_popen_init = subprocess.Popen.__init__
 
     def patched_init(self, *args, **kwargs):
-        # Only patch if no explicit creationflags set — respect callers
-        # that know what they want.
-        creationflags = kwargs.get("creationflags", 0)
-        if creationflags == 0 and "creationflags" not in kwargs:
-            kwargs["creationflags"] = CREATE_NO_WINDOW
-        if "startupinfo" not in kwargs or kwargs.get("startupinfo") is None:
-            si = subprocess.STARTUPINFO()
-            si.dwFlags = STARTF_USESHOWWINDOW
-            si.wShowWindow = SW_HIDE
-            kwargs["startupinfo"] = si
+        if not _is_gui(args, kwargs):
+            if "creationflags" not in kwargs:
+                kwargs["creationflags"] = CREATE_NO_WINDOW
+            if "startupinfo" not in kwargs or kwargs.get("startupinfo") is None:
+                si = subprocess.STARTUPINFO()
+                si.dwFlags = STARTF_USESHOWWINDOW
+                si.wShowWindow = SW_HIDE
+                kwargs["startupinfo"] = si
         original_popen_init(self, *args, **kwargs)
 
     subprocess.Popen.__init__ = patched_init
