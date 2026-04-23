@@ -101,10 +101,34 @@ def ensure_nssm() -> Optional[Path]:
     return dst
 
 
+def _wait_for_service_deleted(nssm: Path, timeout_s: float = 30.0) -> bool:
+    """Poll until the service name is fully removed from the SCM.
+
+    When a stale handle keeps the old service around (Services.msc
+    open, Task Manager's Services tab, another admin console),
+    Windows puts the service in "MARKED FOR DELETION" state and the
+    next CreateService call fails. Wait it out before trying to
+    install a fresh one.
+    """
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        r = subprocess.run(
+            ["sc", "query", SERVICE_NAME],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "does not exist" in (r.stderr or r.stdout or "").lower():
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def install_service(exe_path: str) -> tuple[bool, str]:
     """Install the bridge as a Windows service via NSSM. Assumes the
     caller already verified admin. Returns (ok, message).
     """
+    import time
+
     nssm = ensure_nssm()
     if not nssm:
         return False, "NSSM binary not found in the bundle."
@@ -112,10 +136,19 @@ def install_service(exe_path: str) -> tuple[bool, str]:
     log = config_dir() / "service.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
-    # Remove any previous install — NSSM fails cleanly if the service
-    # doesn't exist.
+    # Clean up any previous install. NSSM is a no-op when the service
+    # doesn't exist, so unconditional stop+remove is safe.
     subprocess.run([str(nssm), "stop", SERVICE_NAME], capture_output=True)
     subprocess.run([str(nssm), "remove", SERVICE_NAME, "confirm"], capture_output=True)
+
+    # If the previous service left a "MARKED FOR DELETION" zombie,
+    # wait it out (up to 30s) before CreateService would collide.
+    if not _wait_for_service_deleted(nssm, timeout_s=30.0):
+        return False, (
+            "Previous service is still being removed by Windows "
+            "(MARKED FOR DELETION). Close Services.msc / Task Manager "
+            "(the Services tab specifically), or reboot, and retry."
+        )
 
     steps = [
         ["install", SERVICE_NAME, exe_path, "--run"],

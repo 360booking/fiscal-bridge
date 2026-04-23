@@ -411,9 +411,15 @@ def main(argv: list[str] | None = None) -> int:
                 _info("DONE", "Enrollment complete. Run again with --run to start the loop.")
             return 0
 
-        if args.install:
+        if args.install and not args.run:
             _install_autorun()
             return 0
+
+        if args.install and args.run:
+            _install_autorun()
+            # Intentionally fall through to --run so the bridge starts
+            # serving in the current window immediately after the
+            # service is registered.
 
         if args.run:
             cfg = BridgeConfig.load()
