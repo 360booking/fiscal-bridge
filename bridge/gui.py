@@ -245,53 +245,69 @@ class StatusPanel:
     def _build(self) -> None:
         self.cfg = BridgeConfig.load()
         cfg = self.cfg
-        f = ttk.Frame(self.root, padding=20)
-        f.grid(row=0, column=0, sticky="nsew")
 
-        # --- Header: app name + version on right ---
-        hdr = ttk.Frame(f)
-        hdr.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 14))
-        ttk.Label(hdr, text="360booking Fiscal Bridge",
-                  style="Header.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(hdr, text=f"v{__version__}",
-                  style="Muted.TLabel").grid(row=0, column=1, sticky="e", padx=(12, 0))
-        hdr.columnconfigure(0, weight=1)
+        # Use plain tk.Frame with explicit bg so we don't depend on any
+        # ttk theme rendering the containers. v0.3.10/0.3.11 lost the
+        # LabelFrame boxes entirely on some Windows themes — only the
+        # header label rendered. Manual frames + border labels sidestep
+        # that whole class of issues.
+        page_bg = "#f5f6f8"
+        card_bg = "#ffffff"
+        border = "#e0e0e5"
+        text_main = "#111827"
+        text_muted = "#6b7280"
 
-        # Live indicators — three rows, each with a colored dot + label.
-        live_box = ttk.LabelFrame(f, text=" Stare ", padding=12)
-        live_box.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 12))
+        self.root.configure(bg=page_bg)
+        f = tk.Frame(self.root, bg=page_bg, padx=20, pady=20)
+        f.pack(fill="both", expand=True)
 
+        def _card(parent: tk.Widget, title: str) -> tk.Frame:
+            shell = tk.Frame(parent, bg=border)  # 1-px "border" via bg
+            shell.pack(fill="x", pady=(0, 12))
+            inner = tk.Frame(shell, bg=card_bg)
+            inner.pack(fill="both", padx=1, pady=1)
+            tk.Label(inner, text=title, bg=card_bg, fg=text_main,
+                     font=("Segoe UI", 10, "bold"), anchor="w"
+                     ).pack(fill="x", padx=14, pady=(12, 6))
+            body = tk.Frame(inner, bg=card_bg)
+            body.pack(fill="x", padx=14, pady=(0, 12))
+            return body
+
+        # --- Header ---
+        hdr = tk.Frame(f, bg=page_bg)
+        hdr.pack(fill="x", pady=(0, 14))
+        tk.Label(hdr, text="360booking Fiscal Bridge", bg=page_bg, fg=text_main,
+                 font=("Segoe UI", 14, "bold")).pack(side="left")
+        tk.Label(hdr, text=f"v{__version__}", bg=page_bg, fg=text_muted,
+                 font=("Segoe UI", 9)).pack(side="right")
+
+        # --- Stare card ---
+        stare = _card(f, "Stare")
         self.dot_process = tk.StringVar(value="●")
         self.dot_ws = tk.StringVar(value="●")
         self.dot_printer = tk.StringVar(value="●")
         self.lbl_process = tk.StringVar(value="Proces: verific…")
         self.lbl_ws = tk.StringVar(value="Conexiune 360booking: verific…")
         self.lbl_printer = tk.StringVar(value="Casa de marcat: verific…")
-
-        # Hold refs to the dot Labels so _set_dot can recolour them —
-        # ttk doesn't let you tint a foreground through a StringVar.
         self._dot_widgets: Dict[str, tk.Label] = {}
 
-        def _dot_line(row: int, key: str, dot_var: tk.StringVar, lbl_var: tk.StringVar):
-            # Use plain tk.Label (not ttk.Label): ttk.Label ignores
-            # foreground configure() on some Windows themes — the text
-            # stays in the theme's default color. Plain tk.Label honours
-            # the `fg` option predictably so red/green actually show.
-            dot = tk.Label(live_box, textvariable=dot_var,
-                           font=("Segoe UI", 14, "bold"),
-                           fg="#888", bg=live_box.cget("background"), width=2)
-            dot.grid(row=row, column=0, sticky="w")
+        def _dot_line(parent, key, dot_var, lbl_var):
+            row = tk.Frame(parent, bg=card_bg)
+            row.pack(fill="x", pady=3)
+            dot = tk.Label(row, textvariable=dot_var, bg=card_bg, fg="#888",
+                           font=("Segoe UI", 14, "bold"), width=2)
+            dot.pack(side="left")
             self._dot_widgets[key] = dot
-            ttk.Label(live_box, textvariable=lbl_var).grid(row=row, column=1, sticky="w")
+            tk.Label(row, textvariable=lbl_var, bg=card_bg, fg=text_main,
+                     font=("Segoe UI", 10), anchor="w"
+                     ).pack(side="left", fill="x", expand=True)
 
-        _dot_line(0, "process", self.dot_process, self.lbl_process)
-        _dot_line(1, "ws", self.dot_ws, self.lbl_ws)
-        _dot_line(2, "printer", self.dot_printer, self.lbl_printer)
+        _dot_line(stare, "process", self.dot_process, self.lbl_process)
+        _dot_line(stare, "ws", self.dot_ws, self.lbl_ws)
+        _dot_line(stare, "printer", self.dot_printer, self.lbl_printer)
 
-        # Detail box grouping tenant + printer info
-        info_box = ttk.LabelFrame(f, text=" Detalii conexiune ", padding=12)
-        info_box.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 8))
-
+        # --- Detalii conexiune card ---
+        det = _card(f, "Detalii conexiune")
         rows = [
             ("Bridge ID", (cfg.bridge_id or "")[:24] + "…" if cfg.bridge_id else "(not set)"),
             ("Tenant", (cfg.tenant_id or "")[:24] + "…" if cfg.tenant_id else "(not set)"),
@@ -300,43 +316,45 @@ class StatusPanel:
             ("Baud rate", str(cfg.serial_baud or 9600)),
         ]
         for i, (label, value) in enumerate(rows):
-            ttk.Label(info_box, text=label + ":", foreground="#555").grid(row=i, column=0, sticky="w", pady=2, padx=(0, 12))
-            ttk.Label(info_box, text=value, font=("Consolas", 9)).grid(row=i, column=1, sticky="w", pady=2)
-        info_box.columnconfigure(1, weight=1)
+            r = tk.Frame(det, bg=card_bg)
+            r.pack(fill="x", pady=2)
+            tk.Label(r, text=label + ":", bg=card_bg, fg=text_muted,
+                     font=("Segoe UI", 9), width=16, anchor="w").pack(side="left")
+            tk.Label(r, text=value, bg=card_bg, fg=text_main,
+                     font=("Consolas", 9), anchor="w"
+                     ).pack(side="left", fill="x", expand=True)
 
-        # Log file location (for support)
-        log_box = ttk.Frame(f)
-        log_box.grid(row=3, column=0, columnspan=2, sticky="we", pady=(4, 0))
-        ttk.Label(log_box, text="Log:", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(log_box, text=str(config_dir() / "bridge.log"),
-                  font=("Consolas", 8), foreground="#666").grid(row=0, column=1, sticky="w", padx=(4, 0))
+        # Log location (small, just below the details card)
+        log_row = tk.Frame(f, bg=page_bg)
+        log_row.pack(fill="x", pady=(0, 10))
+        tk.Label(log_row, text="Log:", bg=page_bg, fg=text_muted,
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(log_row, text=str(config_dir() / "bridge.log"),
+                 bg=page_bg, fg=text_muted, font=("Consolas", 8)
+                 ).pack(side="left", padx=(6, 0))
 
-        # --- Main actions (primary buttons) ---
-        actions = ttk.LabelFrame(f, text=" Acțiuni ", padding=12)
-        actions.grid(row=4, column=0, columnspan=2, sticky="we", pady=(12, 0))
-
-        ttk.Button(actions, text="🖨  Setări imprimantă",
-                   command=self._edit_printer_config, style="Accent.TButton",
-                   width=22).grid(row=0, column=0, padx=4, pady=4, sticky="we")
-        ttk.Button(actions, text="▶  Pornește",
-                   command=self._start, width=22).grid(row=0, column=1, padx=4, pady=4, sticky="we")
-        ttk.Button(actions, text="■  Oprește",
-                   command=self._stop, width=22).grid(row=0, column=2, padx=4, pady=4, sticky="we")
-
-        ttk.Button(actions, text="📄  Deschide log",
-                   command=self._open_log, width=22).grid(row=1, column=0, padx=4, pady=4, sticky="we")
-        ttk.Button(actions, text="⟳  Reactivează (re-enroll)",
-                   command=self._reenroll, width=22).grid(row=1, column=1, padx=4, pady=4, sticky="we")
-        ttk.Button(actions, text="🗑  Dezinstalează",
-                   command=self._uninstall, width=22).grid(row=1, column=2, padx=4, pady=4, sticky="we")
-
-        ttk.Button(actions, text="📌  Creează shortcuts",
-                   command=self._create_shortcuts_manually, width=22).grid(row=2, column=0, padx=4, pady=4, sticky="we")
-        ttk.Button(actions, text="ℹ  Despre",
-                   command=self._show_about, width=22).grid(row=2, column=1, padx=4, pady=4, sticky="we")
-
+        # --- Acțiuni card ---
+        actions = _card(f, "Acțiuni")
+        grid = tk.Frame(actions, bg=card_bg)
+        grid.pack(fill="x")
+        buttons = [
+            ("🖨  Setări imprimantă", self._edit_printer_config, "Accent.TButton"),
+            ("▶  Pornește", self._start, None),
+            ("■  Oprește", self._stop, None),
+            ("📄  Deschide log", self._open_log, None),
+            ("⟳  Re-enroll", self._reenroll, None),
+            ("🗑  Dezinstalează", self._uninstall, "Danger.TButton"),
+            ("📌  Shortcuts", self._create_shortcuts_manually, None),
+            ("ℹ  Despre", self._show_about, None),
+        ]
+        for idx, (label, cmd, style_name) in enumerate(buttons):
+            row, col = divmod(idx, 3)
+            kw = {"text": label, "command": cmd, "width": 20}
+            if style_name:
+                kw["style"] = style_name
+            ttk.Button(grid, **kw).grid(row=row, column=col, padx=4, pady=4, sticky="we")
         for col in range(3):
-            actions.columnconfigure(col, weight=1)
+            grid.columnconfigure(col, weight=1)
 
     def _edit_printer_config(self) -> None:
         """Dialog to edit printer_model / serial_port / serial_baud
