@@ -26,10 +26,19 @@ log = logging.getLogger("bridge.ws")
 _server_protocol_config: dict = {}
 
 
+_FP700_PARAMS = {
+    "protocol": "fp700",
+    "encoding_offset": 0x30,
+    "bcc_algo": "xor",
+    "bcc_coverage": "body",
+    "cmd_width": 1,
+}
+
+
 def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     """Look up the printer via the registry. Per-printer config is
     merged from three sources (later wins):
-      1. BridgeConfig (local file — serial_port, baud, operator)
+      1. BridgeConfig (local file — serial_port, baud, operator, variant)
       2. Server-pushed protocol config (_server_protocol_config)
       3. Per-call overrides (none today)
     """
@@ -39,6 +48,11 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
         "operator": getattr(cfg, "operator", "1"),
         "operator_password": getattr(cfg, "operator_password", "0000"),
     }
+    # If the user forced protocol_variant="fp700" in local config,
+    # apply those wire knobs up-front so the server can't overwrite
+    # them with the fp55 defaults (variant is also in _LOCAL_WINS).
+    if getattr(cfg, "protocol_variant", "fp55") == "fp700":
+        printer_config.update(_FP700_PARAMS)
     # Server-pushed knobs override the compiled-in defaults but not
     # the local serial config (port/baud are physical to the tenant
     # machine and not reasonably pushable from the cloud) and not
@@ -49,8 +63,18 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     # driver reads cfg.get("baud") or cfg.get("serial_baud"), so if we
     # only exclude "serial_baud" the "baud" override still wins. Exclude
     # both spellings.
-    _LOCAL_WINS = {"serial_port", "serial_baud", "baud",
-                   "operator", "operator_password"}
+    _LOCAL_WINS = {
+        "serial_port", "serial_baud", "baud",
+        "operator", "operator_password",
+        # Protocol dialect — if the user switched to fp700 in GUI,
+        # server's fp55 push must not clobber that. All four wire knobs
+        # move together.
+        "protocol", "encoding_offset", "bcc_algo", "bcc_coverage",
+        "cmd_width",
+    } if getattr(cfg, "protocol_variant", "fp55") == "fp700" else {
+        "serial_port", "serial_baud", "baud",
+        "operator", "operator_password",
+    }
     for k, v in _server_protocol_config.items():
         if k in _LOCAL_WINS:
             continue

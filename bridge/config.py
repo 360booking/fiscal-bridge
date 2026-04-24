@@ -63,6 +63,13 @@ class BridgeConfig:
     # when the tenant has a different operator set up.
     operator: str = "1"
     operator_password: str = "0000"
+    # Wire protocol dialect for the Datecs family:
+    #   "fp55" — DP-25 / DP-150 / FP-550 (nibble+0x20, SUM BCC, CMD 4 bytes)
+    #   "fp700" — older FP-700 dialect (nibble+0x30, XOR BCC, CMD 1 byte)
+    # Default fp55. If Test communication yields NAK on fp55 but ACK on
+    # fp700, the user can switch from the GUI to fix it without a new
+    # build. The --probe-printer CLI tries both and recommends which.
+    protocol_variant: str = "fp55"
 
     def save(self) -> None:
         p = config_path()

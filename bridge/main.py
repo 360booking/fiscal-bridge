@@ -477,6 +477,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="Open the settings GUI window directly (used by the tray "
                         "'Deschide setări bridge' menu — Tk cannot run on a daemon "
                         "thread, so we launch a separate process).")
+    p.add_argument("--probe-printer", action="store_true",
+                   help="Send STATUS (0x4A) in both FP-55 and FP-700 dialects "
+                        "and report which the printer ACKs. Use when open_fiscal "
+                        "keeps returning NAK to decide which wire protocol to use.")
     p.add_argument("--uninstall", action="store_true", help="Remove auto-start")
     p.add_argument("--verbose", action="store_true", help="Print debug-level logs")
     args = p.parse_args(argv)
@@ -497,6 +501,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.gui:
             from .gui import run_gui
             return run_gui()
+
+        if args.probe_printer:
+            from . import probe
+            summary = probe.probe_all()
+            print(probe.format_report(summary))
+            return 0 if summary.get("recommended_variant") else 2
 
         if args.uninstall:
             _uninstall_autorun()

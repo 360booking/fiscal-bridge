@@ -186,7 +186,12 @@ class DatecsFPTransport:
         if not self._ser:
             raise DatecsFPError("Port not open")
         frame = self._build_frame(cmd, data)
-        logger.info("→ cmd=0x%02X data=%r  frame=%s", cmd, data, frame.hex())
+        logger.info(
+            "→ cmd=0x%02X data=%r  frame=%s  (variant=%s offset=0x%02X bcc=%s cmd_width=%d)",
+            cmd, data, frame.hex(),
+            "fp55" if self.encoding_offset == 0x20 else ("fp700" if self.encoding_offset == 0x30 else "custom"),
+            self.encoding_offset, self.bcc_algo, self.cmd_width,
+        )
         self._ser.write(frame)
         self._ser.flush()
         try:

@@ -9,4 +9,4 @@ Entry points:
   python -m bridge --run                        normal service loop
 """
 
-__version__ = "0.3.16"
+__version__ = "0.3.17"

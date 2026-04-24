@@ -379,11 +379,12 @@ class StatusPanel:
             ("🖨  Setări imprimantă", self._edit_printer_config, "Accent.TButton"),
             ("▶  Pornește", self._start, None),
             ("■  Oprește", self._stop, None),
+            ("🔧  Test comunicare", self._probe_printer, None),
             ("📄  Deschide log", self._open_log, None),
             ("⟳  Re-enroll", self._reenroll, None),
-            ("🗑  Dezinstalează", self._uninstall, "Danger.TButton"),
             ("📌  Shortcuts", self._create_shortcuts_manually, None),
             ("ℹ  Despre", self._show_about, None),
+            ("🗑  Dezinstalează", self._uninstall, "Danger.TButton"),
         ]
         for idx, (label, cmd, style_name) in enumerate(buttons):
             row, col = divmod(idx, 3)
@@ -485,13 +486,22 @@ class StatusPanel:
         pw_var = tk.StringVar(value=str(getattr(cfg, "operator_password", "0000") or "0000"))
         ttk.Entry(f, textvariable=pw_var, width=28).grid(row=7, column=1, sticky="we", pady=4)
 
+        # --- Protocol variant ---
+        ttk.Label(f, text="Protocol dialect:").grid(row=8, column=0, sticky="w", pady=4)
+        variant_var = tk.StringVar(value=str(getattr(cfg, "protocol_variant", "fp55") or "fp55"))
+        ttk.Combobox(f, textvariable=variant_var,
+                     values=["fp55", "fp700"],
+                     state="readonly", width=28).grid(row=8, column=1, sticky="we", pady=4)
+        ttk.Label(f, text="fp55 = DP-25 modern (default). fp700 = firmware vechi.",
+                  foreground="#666", font=("Segoe UI", 8)).grid(row=9, column=1, sticky="w")
+
         # --- Save / Cancel ---
         status_var = tk.StringVar(value="")
         ttk.Label(f, textvariable=status_var, foreground="#444").grid(
-            row=8, column=0, columnspan=3, sticky="w", pady=(12, 0))
+            row=10, column=0, columnspan=3, sticky="w", pady=(12, 0))
 
         btns = ttk.Frame(f)
-        btns.grid(row=9, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        btns.grid(row=11, column=0, columnspan=3, sticky="e", pady=(12, 0))
 
         def _save():
             try:
@@ -513,6 +523,9 @@ class StatusPanel:
                     val = {"operator": op_var.get(), "operator_password": pw_var.get()}[extra]
                     if val:
                         data[extra] = val
+                # Protocol dialect (fp55 / fp700) — always persisted so
+                # a user who chose fp700 keeps it through upgrades.
+                data["protocol_variant"] = variant_var.get().strip() or "fp55"
 
                 from .config import config_path
                 p = config_path()
@@ -651,6 +664,32 @@ class StatusPanel:
             subprocess.Popen(["notepad", str(log)])
         else:
             subprocess.Popen(["xdg-open", str(log)])
+
+    def _probe_printer(self) -> None:
+        """Run the Datecs probe (both FP-55 and FP-700 dialects) and show
+        the result in a dialog. Helps the user decide which protocol
+        variant their fiscal printer speaks."""
+        try:
+            from . import probe
+            # Tell the user we're busy — the probe opens the COM port
+            # twice which can take a couple seconds.
+            self.root.config(cursor="watch")
+            self.root.update_idletasks()
+            summary = probe.probe_all()
+            report = probe.format_report(summary)
+            if summary.get("recommended_variant") == "fp700":
+                messagebox.showwarning(
+                    WINDOW_TITLE + " — Test comunicare",
+                    report + "\n\nApasă 'Setări imprimantă' pentru a schimba dialectul.",
+                )
+            elif summary.get("recommended_variant") == "fp55":
+                messagebox.showinfo(WINDOW_TITLE + " — Test comunicare", report)
+            else:
+                messagebox.showerror(WINDOW_TITLE + " — Test comunicare", report)
+        except Exception as exc:
+            messagebox.showerror(WINDOW_TITLE, f"Eroare la probe: {exc}")
+        finally:
+            self.root.config(cursor="")
 
     def _create_shortcuts_manually(self) -> None:
         """Fallback for users whose install didn't plant the icons on
