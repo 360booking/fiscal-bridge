@@ -166,8 +166,12 @@ class DatecsDP25Printer(FiscalPrinter):
         if not items:
             return PrintResult(success=False, error="No items on the receipt")
 
-        # Open fiscal: <op>,<pwd>,<till>
-        open_data = f"{self.operator},{self.operator_password},1".encode("ascii")
+        # Open fiscal: <op><TAB><pwd><TAB><till>
+        # Datecs DP-25 / FP-55 firmware uses TAB as field separator for
+        # open_fiscal (same as register_item below). An earlier pass used
+        # comma — that's the FP-700 dialect and produced Device NAK on
+        # real DP-25 hardware.
+        open_data = f"{self.operator}\t{self.operator_password}\t1".encode("ascii")
         self._transport.execute(self._codes["open_fiscal"], open_data)
 
         # Register items.
