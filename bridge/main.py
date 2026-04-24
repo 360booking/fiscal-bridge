@@ -227,10 +227,43 @@ def _install_autorun() -> None:
 
     if service.is_admin():
         _info("AUTORUN", "Admin detected — installing as Windows Service (most robust)")
+        # Copy the .exe to a stable Program Files location and create
+        # Start Menu + Desktop shortcuts before registering the service,
+        # so the service points at a path that survives Downloads cleanup
+        # and the user has a visible app icon to launch the GUI.
+        try:
+            from . import deploy as _deploy
+            # Stop any running service first so the .exe isn't locked
+            # when we overwrite it — install_service will also try but
+            # be explicit here since copy happens before that.
+            try:
+                nssm = service.ensure_nssm()
+                if nssm:
+                    import subprocess as _sp
+                    _sp.run([str(nssm), "stop", service.SERVICE_NAME], capture_output=True, timeout=15)
+            except Exception:
+                pass
+            installed, start_ok, desk_ok = _deploy.deploy(exe)
+            if installed:
+                _ok("AUTORUN", f"installed to {installed}")
+                if start_ok:
+                    _ok("AUTORUN", "Start Menu shortcut created (360booking Fiscal Bridge)")
+                else:
+                    _info("AUTORUN", "Start Menu shortcut could not be created — not fatal")
+                if desk_ok:
+                    _ok("AUTORUN", "Desktop shortcut created")
+                else:
+                    _info("AUTORUN", "Desktop shortcut could not be created — not fatal")
+                exe = str(installed)
+            else:
+                _info("AUTORUN", "Could not copy to Program Files — registering service at current path")
+        except Exception as exc:
+            _info("AUTORUN", f"Deploy step skipped: {exc}")
         ok, msg = service.install_service(exe)
         if ok:
             _ok("AUTORUN", f"Windows Service: {msg}")
             _info("AUTORUN", "Starts at BOOT (before login), survives logout, auto-restarts on crash")
+            _info("AUTORUN", "Pornește GUI: Start Menu → '360booking Fiscal Bridge' (sau scurtătură pe Desktop)")
             return
         _fail("AUTORUN", f"Service install failed: {msg}")
         _info("AUTORUN", "Falling back to scheduled task (per-user)")
@@ -333,6 +366,13 @@ def _uninstall_autorun() -> None:
         _ok("AUTORUN", "scheduled task removed")
     else:
         _info("AUTORUN", "no scheduled task to remove")
+    # Best-effort shortcut cleanup so the tray icon doesn't linger
+    # after uninstall. Non-fatal.
+    try:
+        from . import deploy as _deploy
+        _deploy.uninstall_shortcuts()
+    except Exception:
+        pass
 
 
 def _check_serial_port(port: str) -> None:
