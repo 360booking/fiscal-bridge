@@ -56,15 +56,33 @@ def _task_state() -> str:
 
 
 def _bridge_process_running() -> bool:
-    """Quick check via tasklist for any 360booking-bridge.exe process."""
+    """Quick check via tasklist for any running bridge process. After
+    install the exe name is `360booking-bridge.exe` (lives in Program
+    Files); a freshly-downloaded installer is `360booking-bridge-setup.exe`.
+    Also check the Windows service state so we still say "running" in
+    the rare case tasklist can't see LocalSystem-owned processes from
+    the user session."""
     if not _is_windows():
         return False
+    # 1. tasklist — fast, covers both possible names
     try:
         r = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq 360booking-bridge-setup.exe"],
+            ["tasklist", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=5,
         )
-        return "360booking-bridge-setup.exe" in (r.stdout or "")
+        out = (r.stdout or "").lower()
+        if "360booking-bridge.exe" in out or "360booking-bridge-setup.exe" in out:
+            return True
+    except Exception:
+        pass
+    # 2. service state — LocalSystem services don't always show up in
+    # a non-elevated user's tasklist.
+    try:
+        r = subprocess.run(
+            ["sc", "query", "360bookingFiscalBridge"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "RUNNING" in (r.stdout or "").upper()
     except Exception:
         return False
 
@@ -929,7 +947,34 @@ def _make_card(parent: tk.Widget, title: Optional[str] = None,
     return shell
 
 
+def _focus_existing_gui() -> bool:
+    """If a GUI window with our title already exists on this desktop,
+    raise it to the foreground and return True. Prevents opening a
+    new copy every time the user clicks Tray → Deschide setări."""
+    if not _is_windows():
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype = ctypes.c_void_p
+        user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+        hwnd = user32.FindWindowW(None, WINDOW_TITLE)
+        if hwnd:
+            # SW_RESTORE=9 to unminimize + SetForegroundWindow
+            user32.ShowWindow(ctypes.c_void_p(hwnd), 9)
+            user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def run_gui() -> int:
+    # Single-instance check: if the Setări window is already open,
+    # focus it and exit — no second copy.
+    if _focus_existing_gui():
+        return 0
+
     root = tk.Tk()
     root.title(WINDOW_TITLE)
     root.geometry("680x640")
