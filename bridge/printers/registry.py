@@ -42,6 +42,42 @@ REGISTRY: Dict[str, str] = {
 }
 
 
+# Human-readable catalog for the About dialog + admin UI dropdown.
+# Keep aligned with REGISTRY: every implemented key above must have an
+# "implemented" entry here, and planned models are listed as "planned".
+MODELS: list[dict] = [
+    {"key": "simulator", "brand": "Demo", "model": "Simulator", "status": "implemented",
+     "note": "Pentru teste — nu printează real, doar loghează bonul."},
+
+    {"key": "datecs_dp25", "brand": "Datecs", "model": "DP-25 (FP-55)", "status": "implemented",
+     "note": "Testată pe DP-25 cu firmware FP-55. Funcționează și pe alte Datecs din aceeași familie (DP-150, FP-550) — încearcă și raportează."},
+
+    {"key": "datecs_dp55", "brand": "Datecs", "model": "DP-55", "status": "planned",
+     "note": "În plan — protocol compatibil cu DP-25."},
+    {"key": "datecs_fp550", "brand": "Datecs", "model": "FP-550", "status": "planned",
+     "note": "În plan — protocol FP-55 identic cu DP-25."},
+    {"key": "datecs_fmp10", "brand": "Datecs", "model": "FMP-10", "status": "planned",
+     "note": "Imprimantă fiscală mobilă — în plan."},
+
+    {"key": "tremol_zfp1000", "brand": "Tremol", "model": "ZFP 1000", "status": "planned",
+     "note": "Brand bulgar popular în România — în plan."},
+    {"key": "eltrade_b1", "brand": "Eltrade", "model": "B1", "status": "planned",
+     "note": "În plan."},
+    {"key": "partner_xplorer", "brand": "Partner", "model": "Xplorer", "status": "planned",
+     "note": "În plan."},
+    {"key": "activa_jupiter", "brand": "Activa", "model": "Jupiter", "status": "planned",
+     "note": "În plan."},
+]
+
+
+def implemented_models() -> list[dict]:
+    return [m for m in MODELS if m["status"] == "implemented"]
+
+
+def planned_models() -> list[dict]:
+    return [m for m in MODELS if m["status"] == "planned"]
+
+
 def available_models() -> list[str]:
     return sorted(REGISTRY.keys())
 

@@ -41,9 +41,13 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     }
     # Server-pushed knobs override the compiled-in defaults but not
     # the local serial config (port/baud are physical to the tenant
-    # machine and not reasonably pushable from the cloud).
+    # machine and not reasonably pushable from the cloud) and not
+    # operator/operator_password (set per-till in the GUI by the
+    # person physically at the restaurant — the server default is
+    # 0000 but many tenants run with 0001 or per-cashier passwords).
+    _LOCAL_WINS = {"serial_port", "serial_baud", "operator", "operator_password"}
     for k, v in _server_protocol_config.items():
-        if k in ("serial_port", "serial_baud"):
+        if k in _LOCAL_WINS:
             continue
         printer_config[k] = v
 

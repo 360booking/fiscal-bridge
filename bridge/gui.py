@@ -23,7 +23,7 @@ from urllib import request as urlrequest
 from . import __version__
 from . import status as status_file
 from .config import BridgeConfig, config_dir
-from .printers import available_models
+from .printers import available_models, implemented_models, planned_models
 
 
 TASK_NAME = "360bookingFiscalBridge"
@@ -324,6 +324,9 @@ class StatusPanel:
         ttk.Button(actions, text="🗑  Dezinstalează",
                    command=self._uninstall, width=22).grid(row=1, column=2, padx=4, pady=4, sticky="we")
 
+        ttk.Button(actions, text="ℹ  Despre",
+                   command=self._show_about, width=22).grid(row=2, column=1, padx=4, pady=4, sticky="we")
+
         for col in range(3):
             actions.columnconfigure(col, weight=1)
 
@@ -338,10 +341,28 @@ class StatusPanel:
         dlg.transient(self.root)
         dlg.grab_set()
 
-        f = ttk.Frame(dlg, padding=16)
-        f.grid(row=0, column=0, sticky="nsew")
-
         cfg = self.cfg
+
+        # --- Current configuration status banner (above the form) ---
+        is_configured = bool(cfg.printer_model and cfg.printer_model != "simulator" and cfg.serial_port)
+        is_simulator = cfg.printer_model == "simulator"
+        banner = ttk.Frame(dlg, padding=(16, 12, 16, 4))
+        banner.grid(row=0, column=0, sticky="we")
+        if is_configured:
+            ttk.Label(banner,
+                      text=f"✓ Casa de marcat: configurată — {cfg.printer_model} pe {cfg.serial_port} @ {cfg.serial_baud}",
+                      foreground="#1f883d", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        elif is_simulator:
+            ttk.Label(banner,
+                      text="⚠ Rulează în simulator — selectează modelul real + port COM mai jos.",
+                      foreground="#9a6700", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        else:
+            ttk.Label(banner,
+                      text="✗ Casa de marcat: NU este configurată — completează câmpurile de mai jos.",
+                      foreground="#cf222e", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+
+        f = ttk.Frame(dlg, padding=16)
+        f.grid(row=1, column=0, sticky="nsew")
 
         # --- Model ---
         ttk.Label(f, text="Model imprimantă:").grid(row=0, column=0, sticky="w", pady=4)
@@ -554,6 +575,170 @@ class StatusPanel:
             subprocess.Popen(["notepad", str(log)])
         else:
             subprocess.Popen(["xdg-open", str(log)])
+
+    def _fetch_latest_version(self, latest_var: tk.StringVar, status_var: tk.StringVar) -> None:
+        """Background probe to GitHub Releases — fills latest_var with the
+        tag name or an error note. Runs in a thread so the About dialog
+        isn't blocked by network latency."""
+        import json as _json
+        try:
+            req = urlrequest.Request(
+                "https://api.github.com/repos/360booking/fiscal-bridge/releases/latest",
+                headers={"Accept": "application/json"},
+            )
+            with urlrequest.urlopen(req, timeout=5) as resp:
+                data = _json.loads(resp.read())
+            tag = (data.get("tag_name") or "").lstrip("v")
+            if not tag:
+                self.root.after(0, lambda: latest_var.set("(necunoscut)"))
+                return
+            # Simple version comparison — tuples of ints for stable sort.
+            def _parse(v: str) -> tuple:
+                try:
+                    return tuple(int(p) for p in v.split("."))
+                except Exception:
+                    return (0,)
+            here = _parse(__version__)
+            remote = _parse(tag)
+            if remote > here:
+                msg = f"v{tag}   ⚠ actualizare disponibilă"
+                self.root.after(0, lambda m=msg: latest_var.set(m))
+                self.root.after(0, lambda: status_var.set("update-available"))
+            elif remote == here:
+                self.root.after(0, lambda t=tag: latest_var.set(f"v{t}   ✓ la zi"))
+                self.root.after(0, lambda: status_var.set("up-to-date"))
+            else:
+                self.root.after(0, lambda t=tag: latest_var.set(f"v{t} (ai o versiune mai nouă)"))
+                self.root.after(0, lambda: status_var.set("ahead"))
+        except Exception as exc:
+            self.root.after(0, lambda e=exc: latest_var.set(f"(nu s-a putut verifica: {e})"))
+
+    def _show_about(self) -> None:
+        """Modal dialog with app info, version (current + latest available),
+        configuration status, and the list of supported cash registers."""
+        cfg = self.cfg
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Despre — " + WINDOW_TITLE)
+        dlg.geometry("620x620")
+        dlg.resizable(False, True)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        f = ttk.Frame(dlg, padding=18)
+        f.pack(fill="both", expand=True)
+
+        # --- Header ---
+        ttk.Label(f, text="360booking Fiscal Bridge",
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(f, text="Agent Windows pentru casa de marcat fiscală",
+                  foreground="#555").pack(anchor="w", pady=(0, 10))
+
+        # --- Version block ---
+        ver_box = ttk.LabelFrame(f, text=" Versiune ", padding=10)
+        ver_box.pack(fill="x", pady=(0, 10))
+        ttk.Label(ver_box, text="Instalată:", foreground="#555",
+                  width=16).grid(row=0, column=0, sticky="w")
+        ttk.Label(ver_box, text=f"v{__version__}",
+                  font=("Consolas", 10, "bold")).grid(row=0, column=1, sticky="w")
+        ttk.Label(ver_box, text="Ultima disponibilă:", foreground="#555",
+                  width=16).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        latest_var = tk.StringVar(value="verific…")
+        latest_status = tk.StringVar(value="checking")
+        ttk.Label(ver_box, textvariable=latest_var,
+                  font=("Consolas", 10)).grid(row=1, column=1, sticky="w", pady=(4, 0))
+        ver_box.columnconfigure(1, weight=1)
+
+        # Kick off the GitHub check in a background thread
+        threading.Thread(
+            target=self._fetch_latest_version,
+            args=(latest_var, latest_status),
+            daemon=True,
+        ).start()
+
+        # --- Configuration status ---
+        cfg_box = ttk.LabelFrame(f, text=" Configurare ", padding=10)
+        cfg_box.pack(fill="x", pady=(0, 10))
+
+        def _row(r, label, value, ok):
+            color = "#1f883d" if ok is True else ("#cf222e" if ok is False else "#888")
+            symbol = "✓" if ok is True else ("✗" if ok is False else "—")
+            ttk.Label(cfg_box, text=label + ":", foreground="#555", width=22
+                      ).grid(row=r, column=0, sticky="w", pady=2)
+            ttk.Label(cfg_box, text=f"{symbol}  {value}", foreground=color
+                      ).grid(row=r, column=1, sticky="w", pady=2)
+
+        enrolled = bool(cfg.device_token and cfg.bridge_id)
+        _row(0, "Activat (enroll)", "da" if enrolled else "NU — rulează enrollment", enrolled)
+
+        model_ok = bool(cfg.printer_model) and cfg.printer_model != "simulator"
+        _row(1, "Model imprimantă",
+             cfg.printer_model or "(nu e setat)",
+             True if model_ok else (None if cfg.printer_model == "simulator" else False))
+
+        port_ok = bool(cfg.serial_port)
+        _row(2, "Port COM",
+             cfg.serial_port or "(nu e setat)",
+             True if port_ok else (None if cfg.printer_model == "simulator" else False))
+
+        op_ok = bool(getattr(cfg, "operator", None)) and bool(getattr(cfg, "operator_password", None))
+        _row(3, "Operator + parolă",
+             f"id={getattr(cfg, 'operator', '—')}  pw={'*' * len(getattr(cfg, 'operator_password', '') or '')}"
+                 if op_ok else "(nu e setat)",
+             op_ok)
+
+        # Overall status line
+        overall_ok = enrolled and model_ok and port_ok
+        sim_mode = cfg.printer_model == "simulator"
+        summary_color = "#1f883d" if overall_ok else ("#9a6700" if sim_mode else "#cf222e")
+        summary_text = (
+            "✓ Casa de marcat este configurată" if overall_ok
+            else ("⚠ Rulez în simulator — nu se printează real"
+                  if sim_mode else "✗ Casa de marcat NU este complet configurată")
+        )
+        ttk.Label(cfg_box, text=summary_text, foreground=summary_color,
+                  font=("Segoe UI", 10, "bold")).grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        cfg_box.columnconfigure(1, weight=1)
+
+        # --- Supported printers ---
+        pr_box = ttk.LabelFrame(f, text=" Case de marcat suportate ", padding=6)
+        pr_box.pack(fill="both", expand=True, pady=(0, 10))
+
+        cols = ("brand", "model", "status", "note")
+        tree = ttk.Treeview(pr_box, columns=cols, show="headings", height=9)
+        tree.heading("brand", text="Brand")
+        tree.heading("model", text="Model")
+        tree.heading("status", text="Stare")
+        tree.heading("note", text="Note")
+        tree.column("brand", width=80, anchor="w")
+        tree.column("model", width=110, anchor="w")
+        tree.column("status", width=90, anchor="w")
+        tree.column("note", width=280, anchor="w")
+
+        for m in implemented_models():
+            tree.insert("", "end", values=(
+                m["brand"], m["model"], "✓ suportată", m["note"],
+            ))
+        for m in planned_models():
+            tree.insert("", "end", values=(
+                m["brand"], m["model"], "planificată", m["note"],
+            ))
+
+        sb = ttk.Scrollbar(pr_box, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        ttk.Label(f, text="Dacă ai o casă de marcat care nu apare aici, contactează 360booking.",
+                  foreground="#666", font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 4))
+
+        # --- Footer ---
+        foot = ttk.Frame(f)
+        foot.pack(fill="x")
+        ttk.Label(foot, text="© 360booking.ro",
+                  foreground="#666").pack(side="left")
+        ttk.Button(foot, text="Închide", command=dlg.destroy, width=14
+                   ).pack(side="right")
 
     def _uninstall(self) -> None:
         if not messagebox.askyesno(
