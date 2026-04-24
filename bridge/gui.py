@@ -16,7 +16,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Optional
+from typing import Dict, Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
@@ -268,19 +268,25 @@ class StatusPanel:
         self.lbl_ws = tk.StringVar(value="Conexiune 360booking: verific…")
         self.lbl_printer = tk.StringVar(value="Casa de marcat: verific…")
 
-        def _dot_line(row: int, dot_var: tk.StringVar, lbl_var: tk.StringVar):
-            ttk.Label(live_box, textvariable=dot_var, font=("Segoe UI", 12, "bold"),
-                      foreground="#999", width=2).grid(row=row, column=0, sticky="w")
+        # Hold refs to the dot Labels so _set_dot can recolour them —
+        # ttk doesn't let you tint a foreground through a StringVar.
+        self._dot_widgets: Dict[str, tk.Label] = {}
+
+        def _dot_line(row: int, key: str, dot_var: tk.StringVar, lbl_var: tk.StringVar):
+            # Use plain tk.Label (not ttk.Label): ttk.Label ignores
+            # foreground configure() on some Windows themes — the text
+            # stays in the theme's default color. Plain tk.Label honours
+            # the `fg` option predictably so red/green actually show.
+            dot = tk.Label(live_box, textvariable=dot_var,
+                           font=("Segoe UI", 14, "bold"),
+                           fg="#888", bg=live_box.cget("background"), width=2)
+            dot.grid(row=row, column=0, sticky="w")
+            self._dot_widgets[key] = dot
             ttk.Label(live_box, textvariable=lbl_var).grid(row=row, column=1, sticky="w")
 
-        _dot_line(0, self.dot_process, self.lbl_process)
-        _dot_line(1, self.dot_ws, self.lbl_ws)
-        _dot_line(2, self.dot_printer, self.lbl_printer)
-        self._dots = {
-            "process": (self.dot_process, None),
-            "ws": (self.dot_ws, None),
-            "printer": (self.dot_printer, None),
-        }
+        _dot_line(0, "process", self.dot_process, self.lbl_process)
+        _dot_line(1, "ws", self.dot_ws, self.lbl_ws)
+        _dot_line(2, "printer", self.dot_printer, self.lbl_printer)
 
         # Detail box grouping tenant + printer info
         info_box = ttk.LabelFrame(f, text=" Detalii conexiune ", padding=12)
@@ -473,24 +479,36 @@ class StatusPanel:
 
         f.columnconfigure(1, weight=1)
 
-    @staticmethod
-    def _set_dot(var: tk.StringVar, lbl_var: tk.StringVar,
+    def _set_dot(self, var: tk.StringVar, lbl_var: tk.StringVar,
                  ok: Optional[bool], text: str,
-                 dot_label: Optional[ttk.Label] = None) -> None:
-        # ok=True → green, False → red, None → gray (unknown)
-        color = "#2e7d32" if ok else ("#c62828" if ok is False else "#999")
-        mark = "●"
-        var.set(mark)
-        lbl_var.set(text)
-        # Color is set by re-styling the label — tkinter doesn't let us
-        # change Label foreground via StringVar, so we keep the label
-        # gray and encode state in unicode: green ●, red ✗, gray ○.
+                 key: Optional[str] = None) -> None:
+        """Paint the status dot and set the label.
+        ok=True → green, False → red, None → gray (unknown)."""
         if ok is True:
-            var.set("●")
+            var.set("●"); color = "#1f883d"  # green
         elif ok is False:
-            var.set("✗")
+            var.set("●"); color = "#cf222e"  # red
         else:
-            var.set("○")
+            var.set("●"); color = "#9a9a9a"  # gray
+        lbl_var.set(text)
+        # Look up the dot widget key from the StringVar identity if
+        # caller didn't pass one — makes the signature backwards-compat
+        # with the earlier call sites which only pass var/lbl_var/text.
+        if key is None:
+            for k, (sv, _lbl) in {
+                "process": (self.dot_process, self.lbl_process),
+                "ws": (self.dot_ws, self.lbl_ws),
+                "printer": (self.dot_printer, self.lbl_printer),
+            }.items():
+                if sv is var:
+                    key = k
+                    break
+        widget = self._dot_widgets.get(key) if key else None
+        if widget is not None:
+            try:
+                widget.configure(fg=color)
+            except tk.TclError:
+                pass
 
     def _refresh(self) -> None:
         running_proc = _bridge_process_running()

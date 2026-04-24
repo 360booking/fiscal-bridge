@@ -76,7 +76,7 @@ def _probe_printer(cfg: BridgeConfig) -> dict:
         return {"printer_status": "error", "printer_detail": f"{port}: {exc}"}
 
 
-async def _heartbeat_loop(ws, interval: float = 30.0):
+async def _heartbeat_loop(ws, interval: float = 15.0):
     while True:
         await asyncio.sleep(interval)
         try:
@@ -100,7 +100,12 @@ async def _run_once(cfg: BridgeConfig) -> None:
         **_probe_printer(cfg),
     })
     printer = _build_printer(cfg)
-    async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+    # ping_interval 20s keeps us under typical 60s proxy idle timeouts;
+    # ping_timeout 60s (up from 20s) tolerates occasional server-side
+    # event-loop hiccups without dropping the connection. Combined with
+    # the 15s app-level heartbeat, this keeps the WS up through brief
+    # DB slowdowns without stacking reconnects that kill in-flight jobs.
+    async with websockets.connect(url, ping_interval=20, ping_timeout=60) as ws:
         await ws.send(json.dumps({
             "type": "hello",
             "version": __version__,
