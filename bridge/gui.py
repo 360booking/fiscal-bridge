@@ -401,8 +401,8 @@ class StatusPanel:
         BOM so Python's json.loads doesn't choke on reload."""
         dlg = tk.Toplevel(self.root)
         dlg.title("Setări imprimantă")
-        dlg.geometry("460x360")
-        dlg.resizable(False, False)
+        dlg.geometry("480x540")
+        dlg.resizable(False, True)
         dlg.transient(self.root)
         dlg.grab_set()
 
