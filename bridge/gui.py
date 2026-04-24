@@ -380,6 +380,7 @@ class StatusPanel:
             ("▶  Pornește", self._start, None),
             ("■  Oprește", self._stop, None),
             ("🔧  Test comunicare", self._probe_printer, None),
+            ("❓  Probleme frecvente", self._show_troubleshooting, None),
             ("📄  Deschide log", self._open_log, None),
             ("⟳  Re-enroll", self._reenroll, None),
             ("📌  Shortcuts", self._create_shortcuts_manually, None),
@@ -739,30 +740,94 @@ class StatusPanel:
             subprocess.Popen(["xdg-open", str(log)])
 
     def _probe_printer(self) -> None:
-        """Run the Datecs probe (both FP-55 and FP-700 dialects) and show
-        the result in a dialog. Helps the user decide which protocol
-        variant their fiscal printer speaks."""
+        """Run the Datecs probe and show the result in a scrollable dialog
+        — the report can be long when things fail, and tk messagebox
+        truncates poorly on smaller screens."""
         try:
             from . import probe
-            # Tell the user we're busy — the probe opens the COM port
-            # twice which can take a couple seconds.
             self.root.config(cursor="watch")
             self.root.update_idletasks()
             summary = probe.probe_all()
             report = probe.format_report(summary)
-            if summary.get("recommended_variant") == "fp700":
-                messagebox.showwarning(
-                    WINDOW_TITLE + " — Test comunicare",
-                    report + "\n\nApasă 'Setări imprimantă' pentru a schimba dialectul.",
-                )
-            elif summary.get("recommended_variant") == "fp55":
-                messagebox.showinfo(WINDOW_TITLE + " — Test comunicare", report)
-            else:
-                messagebox.showerror(WINDOW_TITLE + " — Test comunicare", report)
+            title = WINDOW_TITLE + " — Test comunicare"
+            self._show_scroll_text(title, report)
         except Exception as exc:
             messagebox.showerror(WINDOW_TITLE, f"Eroare la probe: {exc}")
         finally:
             self.root.config(cursor="")
+
+    def _show_troubleshooting(self) -> None:
+        """Show a standalone troubleshooting guide without running the
+        probe — useful when the user already knows something's wrong and
+        just wants to see the checklist."""
+        text = (
+            "Probleme frecvente la casa de marcat\n"
+            "======================================\n\n"
+            "1. Imprimanta răspunde cu NAK la TOT / nu răspunde deloc\n"
+            "   ▶ Cel mai des: casa NU E VERIFICATĂ / ACTIVATĂ.\n"
+            "     Un aparat nou sau resetat refuză orice comandă până\n"
+            "     când un tehnician Datecs autorizat face fiscalizarea\n"
+            "     (înregistrare ANAF). Sună tehnicianul.\n"
+            "   ▶ Cablul — USB doar încărcare (fără date)? Încearcă alt cablu.\n"
+            "   ▶ Alt software deschis — Datecs PrintProxy, POS anterior,\n"
+            "     HyperTerminal — închide-le din services.msc / Task Manager.\n\n"
+            "2. Bridge-ul se tot deconectează la ~90s\n"
+            "   ▶ Rezolvat în v0.3.8+: ping_timeout mărit, heartbeat mai des.\n"
+            "     Dacă apare la tine, upgrade la ultima versiune.\n\n"
+            "3. Parola salvată în Setări nu se aplică\n"
+            "   ▶ Rezolvat în v0.3.19: verificare post-save + auto-fix ACL.\n"
+            "     Dacă Save dă eroare roșie, rulează bridge o dată ca admin.\n\n"
+            "4. Status (punctele colorate) nu se schimbă\n"
+            "   ▶ Rezolvat în v0.3.13: detectare proces via tasklist + services.msc.\n"
+            "     Dacă tot vezi gri/roșu deși bridge-ul rulează, trimite log-ul.\n\n"
+            "5. Casa de marcat afișează 'Conexiune PC' dar comenzile nu merg\n"
+            "   ▶ Stare normală pentru USB conectat, înseamnă că o aplicație\n"
+            "     poate comunica cu ea. Dacă tot NAK, treci la punctul 1.\n\n"
+            "6. Port COM greșit\n"
+            "   ▶ Rulează 'Test comunicare' — afișează toate porturile detectate.\n"
+            "   ▶ Scoate USB imprimantă și vezi care port dispare — acela e cel real.\n\n"
+            "7. Baud rate greșit\n"
+            "   ▶ Pe imprimantă: meniu fizic → mode → vezi CAM01..CAM10.\n"
+            "     CAM01=9600, CAM02=19200, CAM04=4800, CAM07=115200.\n"
+            "   ▶ Setează aceeași valoare în Setări imprimantă din GUI.\n\n"
+            "8. Dezinstalare / reactivare\n"
+            "   ▶ Butonul 'Dezinstalează' șterge config + serviciu.\n"
+            "   ▶ Pentru cod nou, apasă 'Re-enroll' și cere cod de la admin panel.\n\n"
+            "Dacă niciuna nu rezolvă, deschide ticket la suport cu:\n"
+            "  • Log-ul complet (Deschide log)\n"
+            "  • Screenshot cu Device Manager → COM ports\n"
+            "  • Modelul + seria imprimantei\n"
+        )
+        self._show_scroll_text(WINDOW_TITLE + " — Probleme frecvente", text)
+
+    def _show_scroll_text(self, title: str, text: str) -> None:
+        """Show a multi-line scrollable text dialog. Better than
+        messagebox for long reports (wraps nicely, user can resize,
+        text selectable for copy-paste into a support ticket)."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.geometry("680x520")
+        dlg.minsize(500, 360)
+        dlg.transient(self.root)
+        wrap = tk.Frame(dlg, bg="#ffffff")
+        wrap.pack(fill="both", expand=True, padx=1, pady=1)
+        txt_frame = tk.Frame(wrap, bg="#ffffff")
+        txt_frame.pack(fill="both", expand=True, padx=12, pady=12)
+        txt = tk.Text(txt_frame, wrap="word", bg="#fafbfc", fg="#111827",
+                      font=("Consolas", 9), relief="flat", padx=8, pady=8)
+        scroll = ttk.Scrollbar(txt_frame, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=scroll.set)
+        txt.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        txt.insert("1.0", text)
+        txt.configure(state="disabled")
+        btn_row = tk.Frame(dlg)
+        btn_row.pack(fill="x", pady=(0, 12), padx=12)
+        def _copy():
+            dlg.clipboard_clear()
+            dlg.clipboard_append(text)
+        ttk.Button(btn_row, text="Copiază tot", command=_copy).pack(side="left")
+        ttk.Button(btn_row, text="Închide", command=dlg.destroy).pack(side="right")
 
     def _create_shortcuts_manually(self) -> None:
         """Fallback for users whose install didn't plant the icons on

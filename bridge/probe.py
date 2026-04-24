@@ -201,16 +201,57 @@ def format_report(summary: dict) -> str:
         lines.append(f"  • Protocol dialect = {rec['dialect']}")
         lines.append("Apoi Save. Următorul print ar trebui să meargă.")
     else:
+        # Detect "instant NAK on every combo" — a specific pattern that
+        # points to an unverified/service-locked fiscal printer rather
+        # than a protocol problem. If ALL probes failed with the NAK
+        # error specifically (not timeout, not open failed), it's almost
+        # never a baud/dialect issue — the printer is rejecting at
+        # firmware level because it hasn't been activated by a
+        # certified technician (ANAF fiscalization not complete).
+        all_nak = bool(summary.get("results")) and all(
+            (not r.ok) and r.error == "Device NAK"
+            for r in summary["results"]
+        )
         lines.append("✗ Nicio combinație (dialect × baud) nu a răspuns.")
         lines.append("")
-        lines.append("Verifică pe rând:")
-        lines.append("  1. Port COM — e cel corect? Vezi lista de mai sus și")
+
+        if all_nak:
+            lines.append("⚠ ATENȚIE: Imprimanta răspunde cu NAK IMEDIAT la orice baud și dialect.")
+            lines.append("")
+            lines.append("Cauza cea mai probabilă (în experiența noastră):")
+            lines.append("")
+            lines.append("  ➤ CASA DE MARCAT NU E VERIFICATĂ / ACTIVATĂ")
+            lines.append("     Un aparat fiscal nou sau resetat nu acceptă NICIO")
+            lines.append("     comandă de la PC până când un tehnician Datecs")
+            lines.append("     autorizat nu face activarea (fiscalizarea la ANAF).")
+            lines.append("     Până atunci, firmware-ul respinge totul cu NAK.")
+            lines.append("")
+            lines.append("     Acțiune: sună tehnicianul care ți-a livrat casa")
+            lines.append("     și cere VERIFICARE / ACTIVARE / FISCALIZARE.")
+            lines.append("     După verificare, rulează din nou Test comunicare.")
+            lines.append("")
+            lines.append("Dacă ești sigur că e verificată:")
+        else:
+            lines.append("Verifică pe rând:")
+        lines.append("  1. Stare imprimantă — ce afișează pe ecranul fizic?")
+        lines.append("     • 'Conexiune PC' / 'Ready'   → stare normală, verifică restul")
+        lines.append("     • 'Eroare' / 'Service'       → eroare internă, restart imprimantă")
+        lines.append("     • Ecran gol / mesaje blocate → casă neverificată (vezi mai sus)")
+        lines.append("  2. Port COM — e cel corect? Vezi lista de mai sus și")
         lines.append("     compară cu Device Manager → Porturi (COM & LPT).")
         lines.append("     Datecs apare de obicei ca 'Datecs Fiscal Printer'.")
-        lines.append("  2. Imprimanta — pornită? Afișează 'Conexiune PC'?")
         lines.append("  3. Cablul — USB/serial e conectat ferm în ambele capete?")
-        lines.append("  4. Alt software — Datecs PrintProxy / DB Connection / ")
-        lines.append("     un POS anterior ține portul deschis? Închide-l.")
-        lines.append("  5. Setările serial ale imprimantei (meniu fizic) —")
-        lines.append("     bytesize 8, parity None, stop 1? (Default peste tot.)")
+        lines.append("     Încearcă alt cablu USB dacă ai. Unele cabluri doar")
+        lines.append("     încărcare (fără date) fac exact acest simptom.")
+        lines.append("  4. Alt software blochează portul — închide:")
+        lines.append("     • Datecs PrintProxy (services.msc → stop)")
+        lines.append("     • Alt POS sau soft fiscal deschis în paralel")
+        lines.append("     • Orice Terminal/HyperTerminal ieșit brusc")
+        lines.append("  5. Bon fiscal stuck — apasă 'C' sau 'CE' pe imprimantă")
+        lines.append("     de 2-3 ori, apoi oprește și pornește imprimanta.")
+        lines.append("  6. Setări serial pe imprimantă (meniu fizic) —")
+        lines.append("     bytesize 8, parity None, stop 1 (default peste tot).")
+        lines.append("  7. Dacă ai un soft propriu Datecs (PrintView, Console,")
+        lines.append("     FP Test), rulează-l — dacă NICI AL LOR nu merge,")
+        lines.append("     imprimanta e în stare eronată sau neverificată.")
     return "\n".join(lines)
