@@ -243,17 +243,18 @@ def _install_autorun() -> None:
                     _sp.run([str(nssm), "stop", service.SERVICE_NAME], capture_output=True, timeout=15)
             except Exception:
                 pass
-            installed, start_ok, desk_ok = _deploy.deploy(exe)
+            installed, results = _deploy.deploy(exe)
             if installed:
                 _ok("AUTORUN", f"installed to {installed}")
-                if start_ok:
-                    _ok("AUTORUN", "Start Menu shortcut created (360booking Fiscal Bridge)")
-                else:
-                    _info("AUTORUN", "Start Menu shortcut could not be created — not fatal")
-                if desk_ok:
-                    _ok("AUTORUN", "Desktop shortcut created")
-                else:
-                    _info("AUTORUN", "Desktop shortcut could not be created — not fatal")
+                any_ok = False
+                for loc, ok in (results or {}).items():
+                    if ok:
+                        _ok("AUTORUN", f"shortcut created: {loc}")
+                        any_ok = True
+                    else:
+                        _info("AUTORUN", f"shortcut skipped: {loc}")
+                if not any_ok:
+                    _info("AUTORUN", "No shortcuts could be created — try the „Creează shortcuts” button in the GUI.")
                 exe = str(installed)
             else:
                 _info("AUTORUN", "Could not copy to Program Files — registering service at current path")
@@ -312,6 +313,17 @@ def _install_autorun() -> None:
 
     _info("AUTORUN", "Falling back to scheduled task (per-user, less robust)")
     _install_scheduled_task()
+    # Even without admin, create per-user Start Menu + Desktop shortcuts
+    # so the user has an icon to launch/restart the bridge — otherwise
+    # they're stuck hunting for the .exe in Downloads.
+    try:
+        from . import deploy as _deploy
+        results = _deploy.create_shortcuts_pointing_to(exe)
+        for loc, ok in (results or {}).items():
+            if ok:
+                _ok("AUTORUN", f"shortcut created: {loc}")
+    except Exception as exc:
+        _info("AUTORUN", f"Shortcut creation skipped: {exc}")
 
 
 def _start_hidden_now() -> None:

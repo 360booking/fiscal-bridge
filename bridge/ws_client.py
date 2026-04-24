@@ -147,6 +147,15 @@ async def _run_once(cfg: BridgeConfig) -> None:
 
 
 async def _handle_job(ws, printer: FiscalPrinter, msg: dict) -> None:
+    # If the user changed config in the GUI (operator password, serial
+    # port, etc.) after we connected, the printer instance still holds
+    # the old values. Rebuild it from the current config file so the
+    # very next job picks up the change without a process restart.
+    try:
+        fresh_cfg = BridgeConfig.load()
+        printer = _build_printer(fresh_cfg)
+    except Exception as exc:
+        log.warning("Could not refresh printer config before job: %s — using cached printer", exc)
     job = PrintJob(
         kind=msg.get("kind") or "",
         job_id=msg.get("job_id") or "",

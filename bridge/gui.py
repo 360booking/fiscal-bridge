@@ -330,6 +330,8 @@ class StatusPanel:
         ttk.Button(actions, text="🗑  Dezinstalează",
                    command=self._uninstall, width=22).grid(row=1, column=2, padx=4, pady=4, sticky="we")
 
+        ttk.Button(actions, text="📌  Creează shortcuts",
+                   command=self._create_shortcuts_manually, width=22).grid(row=2, column=0, padx=4, pady=4, sticky="we")
         ttk.Button(actions, text="ℹ  Despre",
                    command=self._show_about, width=22).grid(row=2, column=1, padx=4, pady=4, sticky="we")
 
@@ -593,6 +595,32 @@ class StatusPanel:
             subprocess.Popen(["notepad", str(log)])
         else:
             subprocess.Popen(["xdg-open", str(log)])
+
+    def _create_shortcuts_manually(self) -> None:
+        """Fallback for users whose install didn't plant the icons on
+        their Desktop / Start Menu. Creates all four shortcut locations
+        (per-user + all-users × Start Menu + Desktop) pointing at the
+        currently-running .exe."""
+        try:
+            from . import deploy as _deploy
+            exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+            results = _deploy.create_shortcuts_pointing_to(exe)
+            created = [k for k, v in results.items() if v]
+            failed = [k for k, v in results.items() if not v]
+            if created:
+                messagebox.showinfo(
+                    WINDOW_TITLE,
+                    "Shortcuts create cu succes:\n\n" + "\n".join(f"  • {c}" for c in created)
+                    + ("\n\nNu s-au putut crea: " + ", ".join(failed) if failed else ""),
+                )
+            else:
+                messagebox.showwarning(
+                    WINDOW_TITLE,
+                    "Nu s-a putut crea niciun shortcut. Verifică log-ul pentru detalii.\n\n"
+                    f"Locații încercate: {', '.join(results.keys()) or 'niciuna'}",
+                )
+        except Exception as exc:
+            messagebox.showerror(WINDOW_TITLE, f"Eroare la creare shortcuts:\n{exc}")
 
     def _fetch_latest_version(self, latest_var: tk.StringVar, status_var: tk.StringVar) -> None:
         """Background probe to GitHub Releases — fills latest_var with the
