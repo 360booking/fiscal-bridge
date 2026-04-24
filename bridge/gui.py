@@ -29,6 +29,26 @@ from .printers import available_models, implemented_models, planned_models
 TASK_NAME = "360bookingFiscalBridge"
 WINDOW_TITLE = "360booking Fiscal Bridge"
 
+# Windows: CREATE_NO_WINDOW + STARTUPINFO.wShowWindow=SW_HIDE prevent
+# a cmd.exe flash when we shell out to tasklist / sc / schtasks every
+# 2 seconds in the refresh loop. Without it, a black console flickers
+# on top of the GUI.
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _hidden_popen_kwargs() -> dict:
+    """Kwargs for subprocess.run / Popen that suppress any console window."""
+    if not _is_windows():
+        return {}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # SW_HIDE
+    return {"creationflags": _CREATE_NO_WINDOW, "startupinfo": si}
+
+
+def _run_hidden(cmd, **kwargs):
+    """subprocess.run wrapper that hides the console window on Windows."""
+    return subprocess.run(cmd, **{**_hidden_popen_kwargs(), **kwargs})
+
 
 # ------------------------------ helpers ----------------------------------
 
@@ -41,7 +61,7 @@ def _task_state() -> str:
     if not _is_windows():
         return "unknown"
     try:
-        r = subprocess.run(
+        r = _run_hidden(
             ["schtasks", "/Query", "/TN", TASK_NAME, "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=5,
         )
@@ -66,7 +86,7 @@ def _bridge_process_running() -> bool:
         return False
     # 1. tasklist — fast, covers both possible names
     try:
-        r = subprocess.run(
+        r = _run_hidden(
             ["tasklist", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=5,
         )
@@ -78,7 +98,7 @@ def _bridge_process_running() -> bool:
     # 2. service state — LocalSystem services don't always show up in
     # a non-elevated user's tasklist.
     try:
-        r = subprocess.run(
+        r = _run_hidden(
             ["sc", "query", "360bookingFiscalBridge"],
             capture_output=True, text=True, timeout=5,
         )
@@ -610,11 +630,11 @@ class StatusPanel:
         if not _is_windows():
             return
         try:
-            subprocess.run(
+            _run_hidden(
                 ["taskkill", "/F", "/IM", "360booking-bridge-setup.exe", "/T"],
                 capture_output=True,
             )
-            subprocess.run(
+            _run_hidden(
                 ["taskkill", "/F", "/IM", "360booking-bridge.exe", "/T"],
                 capture_output=True,
             )
@@ -834,7 +854,7 @@ class StatusPanel:
             return
         self._stop()
         if _is_windows():
-            subprocess.run(
+            _run_hidden(
                 ["schtasks", "/Delete", "/F", "/TN", TASK_NAME],
                 capture_output=True,
             )

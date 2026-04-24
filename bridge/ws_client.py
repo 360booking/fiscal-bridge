@@ -45,7 +45,12 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     # operator/operator_password (set per-till in the GUI by the
     # person physically at the restaurant — the server default is
     # 0000 but many tenants run with 0001 or per-cashier passwords).
-    _LOCAL_WINS = {"serial_port", "serial_baud", "operator", "operator_password"}
+    # NB: server push uses the key "baud" (not "serial_baud") — the
+    # driver reads cfg.get("baud") or cfg.get("serial_baud"), so if we
+    # only exclude "serial_baud" the "baud" override still wins. Exclude
+    # both spellings.
+    _LOCAL_WINS = {"serial_port", "serial_baud", "baud",
+                   "operator", "operator_password"}
     for k, v in _server_protocol_config.items():
         if k in _LOCAL_WINS:
             continue
