@@ -53,31 +53,22 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
     # them with the fp55 defaults (variant is also in _LOCAL_WINS).
     if getattr(cfg, "protocol_variant", "fp55") == "fp700":
         printer_config.update(_FP700_PARAMS)
-    # Server-pushed knobs override the compiled-in defaults but not
-    # the local serial config (port/baud are physical to the tenant
-    # machine and not reasonably pushable from the cloud) and not
-    # operator/operator_password (set per-till in the GUI by the
-    # person physically at the restaurant — the server default is
-    # 0000 but many tenants run with 0001 or per-cashier passwords).
-    # NB: server push uses the key "baud" (not "serial_baud") — the
-    # driver reads cfg.get("baud") or cfg.get("serial_baud"), so if we
-    # only exclude "serial_baud" the "baud" override still wins. Exclude
-    # both spellings.
-    _LOCAL_WINS = {
+    # LOCAL WINS for every field the GUI can edit. Server push only
+    # fills in values the local config didn't provide — realistically
+    # that's just `cmd_codes`. This stops the confusion where the user
+    # saves 0001/fp700/115200/9600 in Setări and the log keeps showing
+    # the server's defaults on reconnect.
+    _NEVER_FROM_SERVER = {
         "serial_port", "serial_baud", "baud",
         "operator", "operator_password",
-        # Protocol dialect — if the user switched to fp700 in GUI,
-        # server's fp55 push must not clobber that. All four wire knobs
-        # move together.
         "protocol", "encoding_offset", "bcc_algo", "bcc_coverage",
         "cmd_width",
-    } if getattr(cfg, "protocol_variant", "fp55") == "fp700" else {
-        "serial_port", "serial_baud", "baud",
-        "operator", "operator_password",
     }
     for k, v in _server_protocol_config.items():
-        if k in _LOCAL_WINS:
-            continue
+        if k in printer_config:
+            continue          # local already set it — never overwrite
+        if k in _NEVER_FROM_SERVER:
+            continue          # user-owned key the server must never push
         printer_config[k] = v
 
     # Diagnostic line — show the EFFECTIVE printer config (password masked)

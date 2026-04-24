@@ -43,6 +43,31 @@ def config_path() -> Path:
     return config_dir() / "config.json"
 
 
+def _grant_users_modify(path: Path) -> None:
+    """Best-effort: grant BUILTIN\\Users Modify on the file so a later
+    user-session GUI save doesn't hit ACL denial because the file was
+    first created by LocalSystem during --install. Silent on failure
+    (non-Windows, or caller is a regular user who can't change ACLs)."""
+    if platform.system() != "Windows":
+        return
+    try:
+        import subprocess
+        si = None
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        except Exception:
+            pass
+        subprocess.run(
+            ["icacls", str(path), "/grant", "*S-1-5-32-545:(M)", "/Q"],
+            capture_output=True, timeout=5,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+            startupinfo=si,
+        )
+    except Exception:
+        pass
+
+
 @dataclass
 class BridgeConfig:
     device_token: Optional[str] = None
@@ -75,6 +100,7 @@ class BridgeConfig:
         p = config_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        _grant_users_modify(p)
 
     @classmethod
     def load(cls) -> "BridgeConfig":

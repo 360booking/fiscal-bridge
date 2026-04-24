@@ -504,46 +504,119 @@ class StatusPanel:
         btns.grid(row=11, column=0, columnspan=3, sticky="e", pady=(12, 0))
 
         def _save():
-            try:
-                # Write config without BOM.
-                import json
-                data = {
-                    "device_token": cfg.device_token,
-                    "tenant_id": cfg.tenant_id,
-                    "bridge_id": cfg.bridge_id,
-                    "websocket_url": cfg.websocket_url,
-                    "printer_model": model_var.get().strip() or "simulator",
-                    "health_port": getattr(cfg, "health_port", 17890),
-                    "server_base_url": cfg.server_base_url,
-                    "serial_port": com_var.get().strip() or None,
-                    "serial_baud": int(baud_var.get() or 9600),
-                }
-                # Keep extra fields on BridgeConfig if any were set before.
-                for extra in ("operator", "operator_password"):
-                    val = {"operator": op_var.get(), "operator_password": pw_var.get()}[extra]
-                    if val:
-                        data[extra] = val
-                # Protocol dialect (fp55 / fp700) — always persisted so
-                # a user who chose fp700 keeps it through upgrades.
-                data["protocol_variant"] = variant_var.get().strip() or "fp55"
+            # Build the dict ONCE outside the try so error branches can
+            # use it for a fallback write.
+            import json as _json
+            from .config import config_path
+            data = {
+                "device_token": cfg.device_token,
+                "tenant_id": cfg.tenant_id,
+                "bridge_id": cfg.bridge_id,
+                "websocket_url": cfg.websocket_url,
+                "printer_model": model_var.get().strip() or "simulator",
+                "health_port": getattr(cfg, "health_port", 17890),
+                "server_base_url": cfg.server_base_url,
+                "serial_port": com_var.get().strip() or None,
+                "serial_baud": int(baud_var.get() or 9600),
+            }
+            for extra in ("operator", "operator_password"):
+                val = {"operator": op_var.get(), "operator_password": pw_var.get()}[extra]
+                if val:
+                    data[extra] = val
+            data["protocol_variant"] = variant_var.get().strip() or "fp55"
 
-                from .config import config_path
-                p = config_path()
+            p = config_path()
+            expected_baud = int(data["serial_baud"])
+            expected_pw = data.get("operator_password")
+            expected_variant = data["protocol_variant"]
+            write_err = None
+            try:
                 p.parent.mkdir(parents=True, exist_ok=True)
-                # Explicit utf-8 (no BOM) + deterministic key order
-                p.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                             encoding="utf-8")
-                dlg.destroy()
-                messagebox.showinfo(
-                    WINDOW_TITLE,
-                    "Setările au fost salvate.\n\n"
-                    "Bridge-ul se va reconecta automat cu noile setări "
-                    "(opreste-l și pornește-l din tray dacă nu se actualizează).",
+                # Atomic write via temp + os.replace so we never leave a
+                # half-written JSON on disk.
+                import os as _os
+                tmp = p.with_suffix(".json.tmp")
+                tmp.write_text(
+                    _json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
                 )
-                # Refresh the cfg we hold so the status panel shows the new values
-                self.cfg = BridgeConfig.load()
+                _os.replace(str(tmp), str(p))
+                # Immediately grant BUILTIN\Users Modify — some installs
+                # have config.json owned by SYSTEM from the initial
+                # --install, and without this step the NEXT save as a
+                # regular user would silently fail.
+                from .config import _grant_users_modify
+                _grant_users_modify(p)
             except Exception as exc:
-                status_var.set(f"Eroare: {exc}")
+                write_err = exc
+
+            # Verify by reloading — catches ACL issues (file owned by
+            # SYSTEM after a previous --install) where the write appears
+            # to succeed but actually didn't persist our fields.
+            reloaded = BridgeConfig.load()
+            mismatches = []
+            if reloaded.serial_baud != expected_baud:
+                mismatches.append(
+                    f"Baud rate: ai setat {expected_baud}, fișierul are {reloaded.serial_baud}"
+                )
+            if expected_pw and getattr(reloaded, "operator_password", None) != expected_pw:
+                mismatches.append(
+                    f"Operator parolă: nu s-a salvat (fișierul are {getattr(reloaded, 'operator_password', None)!r})"
+                )
+            if getattr(reloaded, "protocol_variant", "fp55") != expected_variant:
+                mismatches.append(
+                    f"Protocol dialect: ai setat {expected_variant}, fișierul are {getattr(reloaded, 'protocol_variant', None)}"
+                )
+
+            if write_err or mismatches:
+                # Clear, actionable error. Most common root cause: the
+                # config.json file was created by LocalSystem during
+                # --install and inherits ProgramData ACLs that deny
+                # Users Write/Modify. The fix is to either (a) run the
+                # GUI as Administrator, or (b) reset the file ACL.
+                msg_lines = [
+                    f"Setările NU s-au salvat în {p}.",
+                    "",
+                ]
+                if write_err:
+                    msg_lines.append(f"Eroare de scriere: {write_err}")
+                if mismatches:
+                    msg_lines.append("Verificarea a eșuat:")
+                    for m in mismatches:
+                        msg_lines.append(f"  • {m}")
+                msg_lines += [
+                    "",
+                    "Cauza cea mai probabilă: fișierul de config aparține",
+                    "SYSTEM (creat de serviciul Windows la instalare) și",
+                    "contul tău de utilizator nu are drept să-l modifice.",
+                    "",
+                    "Rezolvare rapidă:",
+                    "  1. Închide această fereastră.",
+                    "  2. Click-dreapta pe '360booking Fiscal Bridge' din",
+                    "     Start Menu → 'Run as administrator'.",
+                    "  3. Deschide Setări imprimantă și salvează din nou.",
+                    "",
+                    "Sau, ca admin într-un PowerShell:",
+                    f"  icacls \"{p}\" /grant Users:(M)",
+                    "(dă drept de Modify tuturor utilizatorilor pentru acel fișier).",
+                ]
+                status_var.set("❌ Salvarea a eșuat — vezi mesajul.")
+                messagebox.showerror(WINDOW_TITLE, "\n".join(msg_lines))
+                return
+
+            dlg.destroy()
+            messagebox.showinfo(
+                WINDOW_TITLE,
+                "Setările au fost salvate cu succes.\n\n"
+                f"Fișier: {p}\n"
+                f"Baud rate:       {expected_baud}\n"
+                f"Operator pass:   {'*' * len(expected_pw or '')}\n"
+                f"Protocol dialect: {expected_variant}\n\n"
+                "Bridge-ul va aplica noile setări la următorul reconnect "
+                "(~60 secunde). Pentru a forța imediat: butonul 'Oprește' "
+                "apoi 'Pornește' din ecranul principal.",
+            )
+            self.cfg = BridgeConfig.load()
 
         ttk.Button(btns, text="Anulează", command=dlg.destroy).grid(row=0, column=0, padx=4)
         ttk.Button(btns, text="Salvează", command=_save).grid(row=0, column=1, padx=4)
