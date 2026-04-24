@@ -139,10 +139,24 @@ def run_tray_with_loop(ws_loop) -> None:
     img = _make_icon_image((150, 150, 150))
 
     def _open_gui(icon, item):
+        """Launch the settings GUI in a separate PROCESS. Tkinter's
+        mainloop must run on the OS main thread — and in a tray-run
+        bridge the main thread is busy with pystray.Icon.run(). A
+        daemon thread would create a Tk root that silently fails to
+        show. Subprocess sidesteps that entirely."""
         try:
-            from . import gui
-            # Launch the GUI in a detached thread
-            threading.Thread(target=gui.run_gui, daemon=True).start()
+            exe = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+            # DETACHED_PROCESS so closing the window doesn't kill the
+            # tray, and no console flashes.
+            CREATE_NO_WINDOW = 0x08000000
+            subprocess.Popen(
+                [exe, "--gui"],
+                creationflags=CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+            )
         except Exception as exc:
             log.exception("Failed to open GUI: %s", exc)
 

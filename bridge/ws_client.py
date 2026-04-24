@@ -214,13 +214,19 @@ async def run_forever() -> None:
         wins the server's last-connect-wins race keeps the slot, the
         other dies for good.
     """
-    cfg = BridgeConfig.load()
-    if not cfg.is_claimed():
+    initial = BridgeConfig.load()
+    if not initial.is_claimed():
         raise SystemExit("Bridge not enrolled. Run with --enroll=CODE first.")
 
     backoff = 1.0
     auth_fail_count = 0
     while True:
+        # Reload config from disk each iteration so GUI Save edits
+        # (operator password, serial port, model, etc.) take effect on
+        # the NEXT reconnect — without requiring a full process restart.
+        cfg = BridgeConfig.load()
+        if not cfg.is_claimed():
+            cfg = initial
         try:
             await _run_once(cfg)
             backoff = 1.0

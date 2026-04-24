@@ -473,6 +473,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--install", action="store_true",
                    help="Register auto-start at user login (Windows scheduled task, "
                         "always hidden — no console window on boot)")
+    p.add_argument("--gui", action="store_true",
+                   help="Open the settings GUI window directly (used by the tray "
+                        "'Deschide setări bridge' menu — Tk cannot run on a daemon "
+                        "thread, so we launch a separate process).")
     p.add_argument("--uninstall", action="store_true", help="Remove auto-start")
     p.add_argument("--verbose", action="store_true", help="Print debug-level logs")
     args = p.parse_args(argv)
@@ -489,6 +493,10 @@ def main(argv: list[str] | None = None) -> int:
             from .upgrade import run_upgrade
             run_upgrade()
             return 0
+
+        if args.gui:
+            from .gui import run_gui
+            return run_gui()
 
         if args.uninstall:
             _uninstall_autorun()

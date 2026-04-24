@@ -829,29 +829,130 @@ class StatusPanel:
 
 # ------------------------------ entry point -----------------------------
 
+# ─── Modern color palette (2026 refresh) ────────────────────────────────
+# Kept out of _style_setup so individual tk.Label/tk.Frame calls (which
+# don't go through ttk styling) can pull consistent colors too.
+COLORS = {
+    "bg":         "#f5f6f8",   # page background — soft neutral
+    "card":       "#ffffff",   # card surface
+    "card_alt":   "#fafbfc",   # secondary / info card
+    "border":     "#e5e7eb",   # subtle dividers
+    "text":       "#111827",   # primary text
+    "text_muted": "#6b7280",   # secondary text
+    "text_soft":  "#9ca3af",   # tertiary / hints
+    "primary":    "#4f46e5",   # indigo-600, matches 360booking brand
+    "primary_hv": "#4338ca",   # hover
+    "success":    "#10b981",
+    "danger":     "#ef4444",
+    "warning":    "#f59e0b",
+}
+
+
 def _style_setup(root: tk.Tk) -> None:
-    """Global ttk styling — pick a modern theme + beef up spacing so
-    the GUI doesn't look like a Windows 95 tool."""
+    """Global styling — flat, modern, 2026-ish. Skip the vista/clam
+    theme backgrounds entirely; we paint cards manually with tk.Frame."""
+    root.configure(bg=COLORS["bg"])
     style = ttk.Style()
     try:
-        style.theme_use("vista" if _is_windows() else "clam")
+        # 'clam' gives us the flattest base to override — vista has
+        # hard-coded gradients we can't suppress.
+        style.theme_use("clam")
     except tk.TclError:
         pass
-    # Bigger default padding on buttons, consistent fonts.
-    style.configure("TButton", padding=(10, 6))
-    style.configure("Accent.TButton", padding=(12, 6), font=("Segoe UI", 9, "bold"))
-    style.configure("TLabel", font=("Segoe UI", 9))
-    style.configure("Header.TLabel", font=("Segoe UI", 13, "bold"))
-    style.configure("Muted.TLabel", foreground="#666", font=("Segoe UI", 8))
+
+    # Buttons — flat, generous padding, clear hover states.
+    style.configure(
+        "TButton",
+        font=("Segoe UI", 10),
+        padding=(14, 8),
+        background=COLORS["card"],
+        foreground=COLORS["text"],
+        borderwidth=1,
+        relief="flat",
+        bordercolor=COLORS["border"],
+    )
+    style.map(
+        "TButton",
+        background=[("active", COLORS["card_alt"]), ("pressed", COLORS["card_alt"])],
+        bordercolor=[("active", COLORS["primary"])],
+    )
+
+    # Accent (primary) button — indigo fill, white text.
+    style.configure(
+        "Accent.TButton",
+        font=("Segoe UI", 10, "bold"),
+        padding=(16, 9),
+        background=COLORS["primary"],
+        foreground="#ffffff",
+        borderwidth=0,
+        relief="flat",
+    )
+    style.map(
+        "Accent.TButton",
+        background=[("active", COLORS["primary_hv"]), ("pressed", COLORS["primary_hv"])],
+        foreground=[("active", "#ffffff")],
+    )
+
+    # Danger button — red, for destructive actions only.
+    style.configure(
+        "Danger.TButton",
+        font=("Segoe UI", 10),
+        padding=(14, 8),
+        background=COLORS["card"],
+        foreground=COLORS["danger"],
+        borderwidth=1,
+        relief="flat",
+        bordercolor=COLORS["border"],
+    )
+    style.map(
+        "Danger.TButton",
+        background=[("active", "#fee2e2")],
+        bordercolor=[("active", COLORS["danger"])],
+    )
+
+    # Labels
+    style.configure("TLabel", font=("Segoe UI", 10), background=COLORS["card"], foreground=COLORS["text"])
+    style.configure("Muted.TLabel", foreground=COLORS["text_muted"], font=("Segoe UI", 9),
+                    background=COLORS["card"])
+    style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"),
+                    background=COLORS["bg"], foreground=COLORS["text"])
+    style.configure("Subheader.TLabel", font=("Segoe UI", 11, "bold"),
+                    background=COLORS["card"], foreground=COLORS["text"])
     style.configure("Status.TLabel", font=("Segoe UI", 10, "bold"))
-    style.configure("TLabelFrame.Label", font=("Segoe UI", 9, "bold"))
+    style.configure("TLabelFrame.Label", font=("Segoe UI", 10, "bold"))
+    style.configure("TFrame", background=COLORS["card"])
+    style.configure("TLabelFrame", background=COLORS["card"], borderwidth=0)
+
+    # Entry / combobox
+    style.configure("TEntry", fieldbackground=COLORS["card"], bordercolor=COLORS["border"])
+    style.configure("TCombobox", fieldbackground=COLORS["card"])
+
+
+def _make_card(parent: tk.Widget, title: Optional[str] = None,
+               bg: Optional[str] = None, pad: int = 16) -> tk.Frame:
+    """Create a flat white card with a subtle 1px border and optional
+    title. Replaces ttk.LabelFrame which looks dated across themes."""
+    bg = bg or COLORS["card"]
+    shell = tk.Frame(parent, bg=COLORS["border"])
+    inner = tk.Frame(shell, bg=bg)
+    inner.pack(fill="both", expand=True, padx=1, pady=1)
+    if title:
+        t = tk.Label(inner, text=title, font=("Segoe UI", 10, "bold"),
+                     fg=COLORS["text"], bg=bg, anchor="w")
+        t.pack(fill="x", padx=pad, pady=(pad, 8))
+    # Attach a content area so callers can pack into it directly.
+    body = tk.Frame(inner, bg=bg)
+    body.pack(fill="both", expand=True, padx=pad, pady=(0 if title else pad, pad))
+    shell._body = body  # type: ignore[attr-defined]
+    return shell
 
 
 def run_gui() -> int:
     root = tk.Tk()
     root.title(WINDOW_TITLE)
-    root.geometry("620x560")
-    root.resizable(False, False)
+    root.geometry("720x720")
+    root.minsize(680, 640)
+    root.configure(bg=COLORS["bg"])
 
     _style_setup(root)
 
