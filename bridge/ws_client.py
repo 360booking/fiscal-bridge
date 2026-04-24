@@ -56,6 +56,18 @@ def _build_printer(cfg: BridgeConfig) -> FiscalPrinter:
             continue
         printer_config[k] = v
 
+    # Diagnostic line — show the EFFECTIVE printer config (password masked)
+    # so the user can verify 0001 really is being used, without leaking
+    # the password to the log.
+    _pw = printer_config.get("operator_password") or ""
+    _pw_masked = (_pw[:1] + "*" * max(len(_pw) - 1, 0)) if _pw else "(empty)"
+    log.info(
+        "Effective printer config: model=%s port=%s baud=%s operator=%s operator_password=%s",
+        cfg.printer_model, printer_config.get("serial_port"),
+        printer_config.get("serial_baud") or printer_config.get("baud"),
+        printer_config.get("operator"), _pw_masked,
+    )
+
     try:
         return printers.build(cfg.printer_model, printer_config)
     except KeyError as exc:
